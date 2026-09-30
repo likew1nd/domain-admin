@@ -1,0 +1,14 @@
+.git
+.github
+.vscode
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.venv
+dist
+data
+artifacts
+backend/backend
+backend/tests
+deploy
+*.log

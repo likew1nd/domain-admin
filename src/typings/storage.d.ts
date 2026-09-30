@@ -40,5 +40,11 @@ declare namespace StorageType {
 
     /** The last login user id */
     lastLoginUserId: string;
+    /** The user name remembered by the login form */
+    rememberedUserName: string;
+    /** The system title from system settings, cached to avoid flashing the default title on startup */
+    systemTitle: string;
+    /** The site logo (data url) from system settings */
+    systemLogo: string;
   }
 }

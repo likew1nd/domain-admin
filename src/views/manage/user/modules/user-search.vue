@@ -79,8 +79,8 @@ async function search() {
               </ElFormItem>
             </ElCol>
             <ElCol :lg="6" :md="8" :sm="12">
-              <ElFormItem :label="$t('page.manage.user.userStatus')" prop="userStatus">
-                <ElSelect v-model="model.userGender" clearable :placeholder="$t('page.manage.user.form.userStatus')">
+              <ElFormItem :label="$t('page.manage.user.userStatus')" prop="status">
+                <ElSelect v-model="model.status" clearable :placeholder="$t('page.manage.user.form.userStatus')">
                   <ElOption
                     v-for="{ label, value } in translateOptions(enableStatusOptions)"
                     :key="value"

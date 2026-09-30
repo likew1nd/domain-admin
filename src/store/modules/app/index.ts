@@ -1,11 +1,12 @@
-import { effectScope, nextTick, onScopeDispose, ref, watch } from 'vue';
+import { effectScope, nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
 import { breakpointsTailwind, useBreakpoints, useEventListener, useTitle } from '@vueuse/core';
 import { defineStore } from 'pinia';
 import { useBoolean } from '@sa/hooks';
 import { router } from '@/router';
+import { fetchGetSettings } from '@/service/api';
 import { localStg } from '@/utils/storage';
 import { SetupStoreId } from '@/enum';
-import { $t, setLocale } from '@/locales';
+import { $t, setLocale, setSystemTitle } from '@/locales';
 import { setDayjsLocale } from '@/locales/dayjs';
 import { useRouteStore } from '../route';
 import { useTabStore } from '../tab';
@@ -67,11 +68,42 @@ export const useAppStore = defineStore(SetupStoreId.App, () => {
 
     const documentTitle = i18nKey ? $t(i18nKey) : title;
 
-    useTitle(documentTitle);
+    useTitle(`${documentTitle} - ${$t('system.title')}`);
   }
+
+  const systemSettings = reactive<Api.SystemSetting.PublicSettings>({
+    systemTitle: localStg.get('systemTitle') || $t('system.title'),
+    logo: localStg.get('systemLogo') || '',
+    captchaEnabled: false,
+    registerEnabled: false,
+    registerEmailRequired: false,
+    emailLoginEnabled: false,
+    passwordResetEnabled: false
+  });
 
   function init() {
     setDayjsLocale(locale.value);
+    updateFavicon(systemSettings.logo);
+    loadSystemSettings();
+  }
+
+  function applySystemSettings(settings: Api.SystemSetting.PublicSettings) {
+    Object.assign(systemSettings, settings);
+    setSystemTitle(settings.systemTitle);
+    localStg.set('systemTitle', settings.systemTitle);
+    localStg.set('systemLogo', settings.logo);
+    updateFavicon(settings.logo);
+    updateDocumentTitleByLocale();
+  }
+
+  function updateFavicon(logo: string) {
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (link) link.href = logo || '/favicon.svg';
+  }
+
+  async function loadSystemSettings() {
+    const { data, error } = await fetchGetSettings();
+    if (!error) applySystemSettings(data);
   }
 
   // watch store
@@ -154,6 +186,9 @@ export const useAppStore = defineStore(SetupStoreId.App, () => {
     toggleSiderCollapse,
     mixSiderFixed,
     setMixSiderFixed,
-    toggleMixSiderFixed
+    toggleMixSiderFixed,
+    systemSettings,
+    applySystemSettings,
+    loadSystemSettings
   };
 });

@@ -8,14 +8,12 @@ import { getAuthorization, handleExpiredRequest, showErrorMsg } from './shared';
 import type { RequestInstanceState } from './type';
 
 const isHttpProxy = import.meta.env.DEV && import.meta.env.VITE_HTTP_PROXY === 'Y';
-const { baseURL, otherBaseURL } = getServiceBaseURL(import.meta.env, isHttpProxy);
+const { otherBaseURL } = getServiceBaseURL(import.meta.env, isHttpProxy);
 
+/** 登录、路由、系统管理接口由本地后端提供，与域名接口一样走同源 /api（开发时由 vite 代理到后端） */
 export const request = createFlatRequest(
   {
-    baseURL,
-    headers: {
-      apifoxToken: 'XL299LiMEDZ0H5h3A29PxwQXdMJqWyY2'
-    }
+    baseURL: '/api'
   },
   {
     defaultState: {

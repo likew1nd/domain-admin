@@ -1,0 +1,45 @@
+# 由 deploy/install.sh 下载到安装目录（默认 /opt/domain-admin），配置写在同目录的 .env 中
+name: domain-admin
+
+services:
+  app:
+    image: ${IMAGE:-ghcr.io/likew1nd/domain-admin:latest}
+    container_name: domain-admin
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8000"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./data:/app/data
+
+  # 在线更新：后台点击“立即更新”后在 data 目录写入 .update-request，
+  # 这里拉取新镜像并重建 app 容器。需要与宿主机相同的目录路径，compose 才能解析 ./data
+  updater:
+    image: ${UPDATER_IMAGE:-docker:cli}
+    container_name: domain-admin-updater
+    restart: unless-stopped
+    working_dir: ${APP_DIR:-/opt/domain-admin}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${APP_DIR:-/opt/domain-admin}:${APP_DIR:-/opt/domain-admin}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mkdir -p data
+        while true; do
+          touch data/.updater-alive
+          if [ -f data/.update-request ]; then
+            rm -f data/.update-request
+            echo "==== $$(date '+%F %T') 开始更新" > data/update.log
+            if docker compose pull app >> data/update.log 2>&1 && docker compose up -d --no-deps app >> data/update.log 2>&1; then
+              echo "==== $$(date '+%F %T') 更新完成" >> data/update.log
+              echo "{\"state\":\"success\",\"time\":$$(date +%s)}" > data/.update-status
+              docker image prune -f >> data/update.log 2>&1 || true
+            else
+              echo "==== $$(date '+%F %T') 更新失败" >> data/update.log
+              echo "{\"state\":\"failed\",\"time\":$$(date +%s)}" > data/.update-status
+            fi
+          fi
+          sleep 5
+        done

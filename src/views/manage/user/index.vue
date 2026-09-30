@@ -1,7 +1,7 @@
 <script setup lang="tsx">
 import { ref } from 'vue';
 import { enableStatusRecord, userGenderRecord } from '@/constants/business';
-import { fetchGetUserList } from '@/service/api';
+import { fetchDeleteUsers, fetchGetUserList } from '@/service/api';
 import { defaultTransform, useTableOperate, useUIPaginatedTable } from '@/hooks/common/table';
 import { $t } from '@/locales';
 import UserOperateDrawer from './modules/user-operate-drawer.vue';
@@ -46,7 +46,7 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
       label: $t('page.manage.user.userGender'),
       width: 100,
       formatter: row => {
-        if (row.userGender === undefined) {
+        if (!row.userGender) {
           return '';
         }
 
@@ -68,7 +68,7 @@ const { columns, columnChecks, data, getData, getDataByPage, loading, mobilePagi
       label: $t('page.manage.user.userStatus'),
       align: 'center',
       formatter: row => {
-        if (row.status === undefined) {
+        if (!row.status) {
           return '';
         }
 
@@ -119,20 +119,18 @@ const {
   // closeDrawer
 } = useTableOperate(data, 'id', getData);
 
-async function handleBatchDelete() {
-  // eslint-disable-next-line no-console
-  console.log(checkedRowKeys.value);
-  // request
-
-  onBatchDeleted();
+function handleSelectionChange(rows: Api.SystemManage.User[]) {
+  checkedRowKeys.value = rows.map(row => String(row.id));
 }
 
-function handleDelete(id: number) {
-  // eslint-disable-next-line no-console
-  console.log(id);
-  // request
+async function handleBatchDelete() {
+  const { error } = await fetchDeleteUsers(checkedRowKeys.value.map(Number));
+  if (!error) onBatchDeleted();
+}
 
-  onDeleted();
+async function handleDelete(id: number) {
+  const { error } = await fetchDeleteUsers([id]);
+  if (!error) onDeleted();
 }
 
 function resetSearchParams() {
@@ -169,7 +167,7 @@ function edit(id: number) {
           class="sm:h-full"
           :data="data"
           row-key="id"
-          @selection-change="checkedRowKeys = $event"
+          @selection-change="handleSelectionChange"
         >
           <ElTableColumn v-for="col in columns" :key="col.prop" v-bind="col" />
         </ElTable>
@@ -187,7 +185,7 @@ function edit(id: number) {
         v-model:visible="drawerVisible"
         :operate-type="operateType"
         :row-data="editingData"
-        @submitted="getDataByPage"
+        @submitted="getData"
       />
     </ElCard>
   </div>

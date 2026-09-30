@@ -96,6 +96,93 @@ export const generatedRoutes: GeneratedRoute[] = [
     ]
   },
   {
+    name: 'domain-generation',
+    path: '/domain-generation',
+    component: 'layout.base',
+    meta: {
+      title: 'domain-generation',
+      i18nKey: 'route.domain-generation',
+      icon: 'mdi:auto-fix',
+      order: 4
+    },
+    children: [
+      {
+        name: 'domain-generation_domain-dictionary',
+        path: '/domain-generation/domain-dictionary',
+        component: 'view.domain-generation_domain-dictionary',
+        meta: {
+          title: 'domain-generation_domain-dictionary',
+          i18nKey: 'route.domain-generation_domain-dictionary',
+          icon: 'mdi:book-alphabet',
+          order: 2
+        }
+      },
+      {
+        name: 'domain-generation_domain-generator',
+        path: '/domain-generation/domain-generator',
+        component: 'view.domain-generation_domain-generator',
+        meta: {
+          title: 'domain-generation_domain-generator',
+          i18nKey: 'route.domain-generation_domain-generator',
+          icon: 'mdi:domain-plus',
+          order: 1
+        }
+      }
+    ]
+  },
+  {
+    name: 'domain-management',
+    path: '/domain-management',
+    component: 'layout.base',
+    meta: {
+      title: 'domain-management',
+      i18nKey: 'route.domain-management',
+      icon: 'mdi:web'
+    },
+    children: [
+      {
+        name: 'domain-management_expired',
+        path: '/domain-management/expired',
+        component: 'view.domain-management_expired',
+        meta: {
+          title: 'domain-management_expired',
+          i18nKey: 'route.domain-management_expired',
+          icon: 'mdi:calendar-clock'
+        }
+      },
+      {
+        name: 'domain-management_kicked',
+        path: '/domain-management/kicked',
+        component: 'view.domain-management_kicked',
+        meta: {
+          title: 'domain-management_kicked',
+          i18nKey: 'route.domain-management_kicked',
+          icon: 'mdi:web-remove'
+        }
+      },
+      {
+        name: 'domain-management_qualified',
+        path: '/domain-management/qualified',
+        component: 'view.domain-management_qualified',
+        meta: {
+          title: 'domain-management_qualified',
+          i18nKey: 'route.domain-management_qualified',
+          icon: 'mdi:check-decagram-outline'
+        }
+      },
+      {
+        name: 'domain-management_unqualified',
+        path: '/domain-management/unqualified',
+        component: 'view.domain-management_unqualified',
+        meta: {
+          title: 'domain-management_unqualified',
+          i18nKey: 'route.domain-management_unqualified',
+          icon: 'mdi:close-circle-outline'
+        }
+      }
+    ]
+  },
+  {
     name: 'function',
     path: '/function',
     component: 'layout.base',
@@ -283,6 +370,18 @@ export const generatedRoutes: GeneratedRoute[] = [
           i18nKey: 'route.manage_role',
           icon: 'carbon:user-role',
           order: 2,
+          roles: ['R_SUPER']
+        }
+      },
+      {
+        name: 'manage_setting',
+        path: '/manage/setting',
+        component: 'view.manage_setting',
+        meta: {
+          title: 'manage_setting',
+          i18nKey: 'route.manage_setting',
+          icon: 'mdi:cog-outline',
+          order: 5,
           roles: ['R_SUPER']
         }
       },
@@ -619,6 +718,48 @@ export const generatedRoutes: GeneratedRoute[] = [
           title: 'plugin_video',
           i18nKey: 'route.plugin_video',
           icon: 'mdi:video'
+        }
+      }
+    ]
+  },
+  {
+    name: 'runtime-control',
+    path: '/runtime-control',
+    component: 'layout.base',
+    meta: {
+      title: 'runtime-control',
+      i18nKey: 'route.runtime-control',
+      icon: 'mdi:cog-play-outline'
+    },
+    children: [
+      {
+        name: 'runtime-control_expired-collection',
+        path: '/runtime-control/expired-collection',
+        component: 'view.runtime-control_expired-collection',
+        meta: {
+          title: 'runtime-control_expired-collection',
+          i18nKey: 'route.runtime-control_expired-collection',
+          icon: 'mdi:database-import-outline'
+        }
+      },
+      {
+        name: 'runtime-control_monitor-tasks',
+        path: '/runtime-control/monitor-tasks',
+        component: 'view.runtime-control_monitor-tasks',
+        meta: {
+          title: 'runtime-control_monitor-tasks',
+          i18nKey: 'route.runtime-control_monitor-tasks',
+          icon: 'mdi:monitor-eye'
+        }
+      },
+      {
+        name: 'runtime-control_query-tasks',
+        path: '/runtime-control/query-tasks',
+        component: 'view.runtime-control_query-tasks',
+        meta: {
+          title: 'runtime-control_query-tasks',
+          i18nKey: 'route.runtime-control_query-tasks',
+          icon: 'mdi:text-search'
         }
       }
     ]

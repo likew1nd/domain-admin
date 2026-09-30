@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { enableStatusOptions, userGenderOptions } from '@/constants/business';
-import { fetchGetAllRoles } from '@/service/api';
+import { fetchAddUser, fetchGetAllRoles, fetchUpdateUser } from '@/service/api';
 import { useForm, useFormRules } from '@/hooks/common/form';
 import { $t } from '@/locales';
 
@@ -27,7 +27,7 @@ const visible = defineModel<boolean>('visible', {
 });
 
 const { formRef, validate, restoreValidation } = useForm();
-const { defaultRequiredRule } = useFormRules();
+const { defaultRequiredRule, formRules, patternRules } = useFormRules();
 
 const title = computed(() => {
   const titles: Record<UI.TableOperateType, string> = {
@@ -37,10 +37,7 @@ const title = computed(() => {
   return titles[props.operateType];
 });
 
-type Model = Pick<
-  Api.SystemManage.User,
-  'userName' | 'userGender' | 'nickName' | 'userPhone' | 'userEmail' | 'userRoles' | 'status'
->;
+type Model = Api.SystemManage.UserEdit;
 
 const model = ref(createDefaultModel());
 
@@ -52,16 +49,21 @@ function createDefaultModel(): Model {
     userPhone: '',
     userEmail: '',
     userRoles: [],
-    status: undefined
+    status: '1',
+    password: ''
   };
 }
 
-type RuleKey = Extract<keyof Model, 'userName' | 'status'>;
+const isAdd = computed(() => props.operateType === 'add');
 
-const rules: Record<RuleKey, App.Global.FormRule> = {
-  userName: defaultRequiredRule,
+/** 新增时必须设置密码，编辑时留空表示不修改密码 */
+const rules = computed<Record<string, App.Global.FormRule | App.Global.FormRule[]>>(() => ({
+  userName: formRules.userName,
+  password: isAdd.value ? formRules.pwd : [patternRules.pwd],
+  userPhone: [patternRules.phone],
+  userEmail: [patternRules.email],
   status: defaultRequiredRule
-};
+}));
 
 /** the enabled role options */
 const roleOptions = ref<CommonType.Option<string>[]>([]);
@@ -70,20 +72,10 @@ async function getRoleOptions() {
   const { error, data } = await fetchGetAllRoles();
 
   if (!error) {
-    const options = data.map(item => ({
+    roleOptions.value = data.map(item => ({
       label: item.roleName,
       value: item.roleCode
     }));
-
-    // the mock data does not have the roleCode, so fill it
-    // if the real request, remove the following code
-    const userRoleOptions = model.value.userRoles.map(item => ({
-      label: item,
-      value: item
-    }));
-    // end
-
-    roleOptions.value = [...userRoleOptions, ...options];
   }
 }
 
@@ -91,7 +83,8 @@ function handleInitModel() {
   model.value = createDefaultModel();
 
   if (props.operateType === 'edit' && props.rowData) {
-    Object.assign(model.value, props.rowData);
+    const { userName, userGender, nickName, userPhone, userEmail, userRoles, status } = props.rowData;
+    Object.assign(model.value, { userName, userGender, nickName, userPhone, userEmail, userRoles, status });
   }
 }
 
@@ -99,10 +92,21 @@ function closeDrawer() {
   visible.value = false;
 }
 
+const submitting = ref(false);
+
 async function handleSubmit() {
   await validate();
-  // request
-  window.$message?.success($t('common.updateSuccess'));
+
+  const { password, ...rest } = model.value;
+  const params: Model = { ...rest, ...(password ? { password } : {}) };
+
+  submitting.value = true;
+  const { error } =
+    isAdd.value || !props.rowData ? await fetchAddUser(params) : await fetchUpdateUser(props.rowData.id, params);
+  submitting.value = false;
+  if (error) return;
+
+  window.$message?.success($t(isAdd.value ? 'common.addSuccess' : 'common.updateSuccess'));
   closeDrawer();
   emit('submitted');
 }
@@ -122,6 +126,15 @@ watch(visible, () => {
       <ElFormItem :label="$t('page.manage.user.userName')" prop="userName">
         <ElInput v-model="model.userName" :placeholder="$t('page.manage.user.form.userName')" />
       </ElFormItem>
+      <ElFormItem label="密码" prop="password">
+        <ElInput
+          v-model="model.password"
+          type="password"
+          show-password
+          autocomplete="new-password"
+          :placeholder="isAdd ? '6-18 位字母、数字或下划线' : '留空表示不修改密码'"
+        />
+      </ElFormItem>
       <ElFormItem :label="$t('page.manage.user.userGender')" prop="userGender">
         <ElRadioGroup v-model="model.userGender">
           <ElRadio v-for="item in userGenderOptions" :key="item.value" :value="item.value" :label="$t(item.label)" />
@@ -133,7 +146,7 @@ watch(visible, () => {
       <ElFormItem :label="$t('page.manage.user.userPhone')" prop="userPhone">
         <ElInput v-model="model.userPhone" :placeholder="$t('page.manage.user.form.userPhone')" />
       </ElFormItem>
-      <ElFormItem :label="$t('page.manage.user.userEmail')" prop="email">
+      <ElFormItem :label="$t('page.manage.user.userEmail')" prop="userEmail">
         <ElInput v-model="model.userEmail" :placeholder="$t('page.manage.user.form.userEmail')" />
       </ElFormItem>
       <ElFormItem :label="$t('page.manage.user.userStatus')" prop="status">
@@ -141,7 +154,7 @@ watch(visible, () => {
           <ElRadio v-for="item in enableStatusOptions" :key="item.value" :value="item.value" :label="$t(item.label)" />
         </ElRadioGroup>
       </ElFormItem>
-      <ElFormItem :label="$t('page.manage.user.userRole')" prop="roles">
+      <ElFormItem :label="$t('page.manage.user.userRole')" prop="userRoles">
         <ElSelect v-model="model.userRoles" multiple :placeholder="$t('page.manage.user.form.userRole')">
           <ElOption v-for="{ label, value } in roleOptions" :key="value" :label="label" :value="value" />
         </ElSelect>
@@ -150,7 +163,7 @@ watch(visible, () => {
     <template #footer>
       <ElSpace :size="16">
         <ElButton @click="closeDrawer">{{ $t('common.cancel') }}</ElButton>
-        <ElButton type="primary" @click="handleSubmit">{{ $t('common.confirm') }}</ElButton>
+        <ElButton type="primary" :loading="submitting" @click="handleSubmit">{{ $t('common.confirm') }}</ElButton>
       </ElSpace>
     </template>
   </ElDrawer>

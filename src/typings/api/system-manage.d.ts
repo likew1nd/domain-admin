@@ -1,4 +1,61 @@
 declare namespace Api {
+  namespace SystemSetting {
+    /** readable before login */
+    interface PublicSettings {
+      systemTitle: string;
+      logo: string;
+      captchaEnabled: boolean;
+      registerEnabled: boolean;
+      /** SMTP is configured, so registration must verify the email */
+      registerEmailRequired: boolean;
+      emailLoginEnabled: boolean;
+      passwordResetEnabled: boolean;
+    }
+
+    interface Settings {
+      systemTitle: string;
+      logo: string;
+      loginKeepDays: number;
+      captchaEnabled: boolean;
+      lockMaxAttempts: number;
+      lockMinutes: number;
+      registerEnabled: boolean;
+      registerNeedApproval: boolean;
+      registerDefaultRole: string;
+      emailLoginEnabled: boolean;
+      passwordResetEnabled: boolean;
+      smtpHost: string;
+      smtpPort: number;
+      smtpSsl: boolean;
+      smtpUser: string;
+      smtpFrom: string;
+      hasSmtpPassword: boolean;
+    }
+
+    /** `smtpPassword` is omitted to keep the saved password */
+    type SettingsEdit = Omit<Settings, 'hasSmtpPassword'> & { smtpPassword?: string };
+
+    /** `failed` means the last online update did not finish, `log` holds its tail */
+    interface UpdateStatus {
+      state: 'idle' | 'running' | 'success' | 'failed';
+      time: number;
+      log?: string;
+    }
+
+    interface VersionInfo {
+      current: string;
+      latest: string;
+      hasUpdate: boolean;
+      releaseNotes: string;
+      releaseUrl: string;
+      publishedAt: string;
+      checkError: string;
+      /** the docker updater service is running, so online update is possible */
+      updateSupported: boolean;
+      updateStatus: UpdateStatus;
+    }
+  }
+
   /**
    * namespace SystemManage
    *
@@ -133,7 +190,34 @@ declare namespace Api {
       id: number;
       label: string;
       pId: number;
+      /** route name */
+      routeName: string;
+      /** whether the menu is a page that can be used as home */
+      isPage: boolean;
       children?: MenuTree[];
+    };
+
+    type EditableFields = 'id' | 'createBy' | 'createTime' | 'updateBy' | 'updateTime';
+
+    /** user add / update params, password is optional when updating */
+    type UserEdit = Omit<User, EditableFields> & { password?: string };
+
+    /** role add / update params */
+    type RoleEdit = Pick<Role, 'roleName' | 'roleCode' | 'roleDesc' | 'status'>;
+
+    /** menu add / update params */
+    type MenuEdit = Omit<Menu, EditableFields | 'children'>;
+
+    /** menus and home authorized to a role */
+    type RoleMenuAuth = {
+      home: string;
+      menuIds: number[];
+    };
+
+    /** button defined in menus */
+    type ButtonOption = MenuButton & {
+      /** the menu the button belongs to */
+      menuName: string;
     };
   }
 }

@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { useBoolean } from '@sa/hooks';
 import { enableStatusOptions } from '@/constants/business';
+import { fetchAddRole, fetchUpdateRole } from '@/service/api';
 import { useForm, useFormRules } from '@/hooks/common/form';
 import { $t } from '@/locales';
 import MenuAuthModal from './menu-auth-modal.vue';
@@ -41,7 +42,7 @@ const title = computed(() => {
   return titles[props.operateType];
 });
 
-type Model = Pick<Api.SystemManage.Role, 'roleName' | 'roleCode' | 'roleDesc' | 'status'>;
+type Model = Api.SystemManage.RoleEdit;
 
 const model = ref(createDefaultModel());
 
@@ -50,7 +51,7 @@ function createDefaultModel(): Model {
     roleName: '',
     roleCode: '',
     roleDesc: '',
-    status: undefined
+    status: '1'
   };
 }
 
@@ -70,7 +71,8 @@ function handleInitModel() {
   model.value = createDefaultModel();
 
   if (props.operateType === 'edit' && props.rowData) {
-    Object.assign(model.value, props.rowData);
+    const { roleName, roleCode, roleDesc, status } = props.rowData;
+    Object.assign(model.value, { roleName, roleCode, roleDesc, status });
   }
 }
 
@@ -78,10 +80,23 @@ function closeDrawer() {
   visible.value = false;
 }
 
+const submitting = ref(false);
+
+/** 超级管理员始终拥有全部菜单和按钮，无需授权 */
+const isSuperRole = computed(() => props.rowData?.roleCode === import.meta.env.VITE_STATIC_SUPER_ROLE);
+
 async function handleSubmit() {
   await validate();
-  // request
-  window.$message?.success($t('common.updateSuccess'));
+
+  submitting.value = true;
+  const { error } =
+    isEdit.value && props.rowData
+      ? await fetchUpdateRole(props.rowData.id, model.value)
+      : await fetchAddRole(model.value);
+  submitting.value = false;
+  if (error) return;
+
+  window.$message?.success($t(isEdit.value ? 'common.updateSuccess' : 'common.addSuccess'));
   closeDrawer();
   emit('submitted');
 }
@@ -112,7 +127,8 @@ watch(visible, () => {
         <ElInput v-model="model.roleDesc" :placeholder="$t('page.manage.role.form.roleDesc')" />
       </ElFormItem>
     </ElForm>
-    <ElSpace v-if="isEdit">
+    <ElAlert v-if="isEdit && isSuperRole" type="info" :closable="false" title="超级管理员拥有全部菜单和按钮权限" />
+    <ElSpace v-else-if="isEdit">
       <ElButton @click="openMenuAuthModal">{{ $t('page.manage.role.menuAuth') }}</ElButton>
       <MenuAuthModal v-model:visible="menuAuthVisible" :role-id="roleId" />
       <ElButton @click="openButtonAuthModal">{{ $t('page.manage.role.buttonAuth') }}</ElButton>
@@ -121,7 +137,7 @@ watch(visible, () => {
     <template #footer>
       <ElSpace :size="16">
         <ElButton @click="closeDrawer">{{ $t('common.cancel') }}</ElButton>
-        <ElButton type="primary" @click="handleSubmit">{{ $t('common.confirm') }}</ElButton>
+        <ElButton type="primary" :loading="submitting" @click="handleSubmit">{{ $t('common.confirm') }}</ElButton>
       </ElSpace>
     </template>
   </ElDrawer>

@@ -4,7 +4,7 @@ import type { Ref } from 'vue';
 import { useBoolean } from '@sa/hooks';
 import { yesOrNoRecord } from '@/constants/common';
 import { enableStatusRecord, menuTypeRecord } from '@/constants/business';
-import { fetchGetAllPages, fetchGetMenuList } from '@/service/api';
+import { fetchDeleteMenus, fetchGetAllPages, fetchGetMenuList } from '@/service/api';
 import { defaultTransform, useTableOperate, useUIPaginatedTable } from '@/hooks/common/table';
 import { $t } from '@/locales';
 import SvgIcon from '@/components/custom/svg-icon.vue';
@@ -14,7 +14,7 @@ const { bool: visible, setTrue: openModal } = useBoolean();
 
 const wrapperRef = ref<HTMLElement | null>(null);
 
-const { columns, columnChecks, data, loading, pagination, getData, getDataByPage } = useUIPaginatedTable({
+const { columns, columnChecks, data, loading, pagination, getData } = useUIPaginatedTable({
   api: () => fetchGetMenuList(),
   transform: response => defaultTransform(response),
   columns: () => [
@@ -35,18 +35,7 @@ const { columns, columnChecks, data, loading, pagination, getData, getDataByPage
         return <ElTag type={tagMap[row.menuType]}>{label}</ElTag>;
       }
     },
-    {
-      prop: 'menuName',
-      label: $t('page.manage.menu.menuName'),
-      minWidth: 120,
-      formatter: row => {
-        const { i18nKey, menuName } = row;
-
-        const label = i18nKey ? $t(i18nKey) : menuName;
-
-        return <span>{label}</span>;
-      }
-    },
+    { prop: 'menuName', label: $t('page.manage.menu.menuName'), minWidth: 120 },
     {
       prop: 'icon',
       label: $t('page.manage.menu.icon'),
@@ -70,7 +59,7 @@ const { columns, columnChecks, data, loading, pagination, getData, getDataByPage
       label: $t('page.manage.menu.menuStatus'),
       width: 80,
       formatter: row => {
-        if (row.status === undefined) {
+        if (!row.status) {
           return '';
         }
 
@@ -141,18 +130,18 @@ function handleAdd() {
   openModal();
 }
 
-async function handleBatchDelete() {
-  // request
-
-  onBatchDeleted();
+function handleSelectionChange(rows: Api.SystemManage.Menu[]) {
+  checkedRowKeys.value = rows.map(row => String(row.id));
 }
 
-function handleDelete(id: number) {
-  // eslint-disable-next-line no-console
-  console.log(id);
-  // request
+async function handleBatchDelete() {
+  const { error } = await fetchDeleteMenus(checkedRowKeys.value.map(Number));
+  if (!error) onBatchDeleted();
+}
 
-  onDeleted();
+async function handleDelete(id: number) {
+  const { error } = await fetchDeleteMenus([id]);
+  if (!error) onDeleted();
 }
 
 /** the edit menu data or the parent menu data when adding a child menu */
@@ -212,7 +201,7 @@ init();
           class="sm:h-full"
           :data="data"
           row-key="id"
-          @selection-change="checkedRowKeys = $event"
+          @selection-change="handleSelectionChange"
         >
           <ElTableColumn v-for="col in columns" :key="col.prop" v-bind="col" />
         </ElTable>
@@ -231,7 +220,7 @@ init();
         :operate-type="operateType"
         :row-data="editingData"
         :all-pages="allPages"
-        @submitted="getDataByPage"
+        @submitted="getData"
       />
     </ElCard>
   </div>

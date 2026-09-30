@@ -24,3 +24,13 @@ export const $t = i18n.global.t as App.I18n.$T;
 export function setLocale(locale: App.I18n.LangType) {
   i18n.global.locale.value = locale;
 }
+
+/** The system title is configured on the settings page and overrides the built-in text for every language */
+export function setSystemTitle(title: string) {
+  Object.keys(messages).forEach(locale => {
+    i18n.global.mergeLocaleMessage(locale, { system: { title } });
+  });
+}
+
+const cachedTitle = localStg.get('systemTitle');
+if (cachedTitle) setSystemTitle(cachedTitle);

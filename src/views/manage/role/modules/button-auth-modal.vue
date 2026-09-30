@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, shallowRef } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
+import { fetchGetAllButtons, fetchGetRoleButtonAuth, fetchUpdateRoleButtonAuth } from '@/service/api';
 import { $t } from '@/locales';
 
 defineOptions({ name: 'ButtonAuthModal' });
@@ -21,82 +22,55 @@ function closeModal() {
 
 const title = computed(() => $t('common.edit') + $t('page.manage.role.buttonAuth'));
 
-type ButtonConfig = {
-  id: number;
-  label: string;
-  code: string;
-};
+const loading = ref(false);
+const submitting = ref(false);
 
-const tree = shallowRef<ButtonConfig[]>([]);
+/** 按钮来自菜单管理中为各菜单配置的按钮 */
+const buttons = shallowRef<Api.SystemManage.ButtonOption[]>([]);
+const checks = ref<string[]>([]);
 
-async function getAllButtons() {
-  // request
-  tree.value = [
-    { id: 1, label: 'button1', code: 'code1' },
-    { id: 2, label: 'button2', code: 'code2' },
-    { id: 3, label: 'button3', code: 'code3' },
-    { id: 4, label: 'button4', code: 'code4' },
-    { id: 5, label: 'button5', code: 'code5' },
-    { id: 6, label: 'button6', code: 'code6' },
-    { id: 7, label: 'button7', code: 'code7' },
-    { id: 8, label: 'button8', code: 'code8' },
-    { id: 9, label: 'button9', code: 'code9' },
-    { id: 10, label: 'button10', code: 'code10' }
-  ];
+async function init() {
+  loading.value = true;
+  const [buttonsResult, authResult] = await Promise.all([fetchGetAllButtons(), fetchGetRoleButtonAuth(props.roleId)]);
+  loading.value = false;
+  if (buttonsResult.error || authResult.error) return;
+
+  buttons.value = buttonsResult.data;
+  checks.value = authResult.data;
 }
 
-const checks = shallowRef<number[]>([]);
+async function handleSubmit() {
+  submitting.value = true;
+  const { error } = await fetchUpdateRoleButtonAuth(props.roleId, checks.value);
+  submitting.value = false;
+  if (error) return;
 
-async function getChecks() {
-  // eslint-disable-next-line no-console
-  console.log(props.roleId);
-  // request
-  checks.value = [1, 2, 3, 4, 5];
-}
-
-function checkChange(val: ButtonConfig) {
-  const idx = checks.value.indexOf(val.id);
-  if (idx === -1) {
-    checks.value.push(val.id);
-  } else {
-    checks.value.splice(idx, 1);
-  }
-}
-
-function handleSubmit() {
-  // eslint-disable-next-line no-console
-  console.log(checks.value, props.roleId);
-  // request
-
-  window.$message?.success?.($t('common.modifySuccess'));
-
+  window.$message?.success($t('common.modifySuccess'));
   closeModal();
 }
 
-function init() {
-  getAllButtons();
-  getChecks();
-}
-
-// init
-init();
+watch(visible, val => {
+  if (val) {
+    init();
+  }
+});
 </script>
 
 <template>
-  <ElDialog v-model="visible" :title="title" preset="card" class="w-480px">
-    <ElTree
-      v-model:checked-keys="checks"
-      :data="tree"
-      node-key="id"
-      show-checkbox
-      class="h-280px overflow-y-auto"
-      :default-checked-keys="checks"
-      @check-change="checkChange"
-    />
+  <ElDialog v-model="visible" :title="title" class="w-480px">
+    <div v-loading="loading" class="h-280px overflow-y-auto">
+      <ElCheckboxGroup v-if="buttons.length" v-model="checks" class="flex-col">
+        <ElCheckbox v-for="item in buttons" :key="item.code" :value="item.code">
+          {{ item.desc || item.code }}
+          <span class="text-12px text-gray-400">（{{ item.menuName }} · {{ item.code }}）</span>
+        </ElCheckbox>
+      </ElCheckboxGroup>
+      <ElEmpty v-else-if="!loading" description="暂无按钮，可在菜单管理中为菜单配置按钮" />
+    </div>
     <template #footer>
       <ElSpace class="w-full justify-end">
-        <ElButton size="small" class="mt-16px" @click="closeModal">{{ $t('common.cancel') }}</ElButton>
-        <ElButton type="primary" size="small" class="mt-16px" @click="handleSubmit">
+        <ElButton size="small" @click="closeModal">{{ $t('common.cancel') }}</ElButton>
+        <ElButton type="primary" size="small" :loading="submitting" @click="handleSubmit">
           {{ $t('common.confirm') }}
         </ElButton>
       </ElSpace>

@@ -1,7 +1,7 @@
 <script setup lang="tsx">
 import { computed, h, ref, watch } from 'vue';
 import { enableStatusOptions, menuIconTypeOptions, menuTypeOptions } from '@/constants/business';
-import { fetchGetAllRoles } from '@/service/api';
+import { fetchAddMenu, fetchGetAllRoles, fetchUpdateMenu } from '@/service/api';
 import { useForm, useFormRules } from '@/hooks/common/form';
 import { getLocalIcons } from '@/utils/icon';
 import { $t } from '@/locales';
@@ -240,7 +240,7 @@ function handleUpdateI18nKeyByRouteName() {
   }
 }
 
-function getSubmitParams() {
+function getSubmitParams(): Api.SystemManage.MenuEdit {
   const { layout, page, pathParam, ...params } = model.value;
 
   const component = transformLayoutAndPageToComponent(layout, page);
@@ -252,16 +252,20 @@ function getSubmitParams() {
   return params;
 }
 
+const submitting = ref(false);
+
 async function handleSubmit() {
   await validate();
 
   const params = getSubmitParams();
+  const isEdit = props.operateType === 'edit' && props.rowData;
 
-  // eslint-disable-next-line no-console
-  console.log('params: ', params);
+  submitting.value = true;
+  const { error } = isEdit ? await fetchUpdateMenu(props.rowData!.id, params) : await fetchAddMenu(params);
+  submitting.value = false;
+  if (error) return;
 
-  // request
-  window.$message?.success($t('common.updateSuccess'));
+  window.$message?.success($t(isEdit ? 'common.updateSuccess' : 'common.addSuccess'));
   closeDrawer();
   emit('submitted');
 }
@@ -547,7 +551,7 @@ watch(
     <template #footer>
       <ElSpace :size="16" class="float-right">
         <ElButton @click="closeDrawer">{{ $t('common.cancel') }}</ElButton>
-        <ElButton type="primary" @click="handleSubmit">{{ $t('common.confirm') }}</ElButton>
+        <ElButton type="primary" :loading="submitting" @click="handleSubmit">{{ $t('common.confirm') }}</ElButton>
       </ElSpace>
     </template>
   </ElDialog>

@@ -57,7 +57,7 @@ export const themeSettings: App.Theme.ThemeSetting = {
   },
   watermark: {
     visible: false,
-    text: 'SoybeanAdmin',
+    text: '域名抢注系统',
     enableUserName: false
   },
   tokens: {

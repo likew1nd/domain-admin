@@ -192,6 +192,9 @@ const customRoutes: CustomRoute[] = [
   }
 ];
 
+/** 模板自带的示例菜单，不注册到路由中（页面文件仍保留） */
+const removedRoutes: string[] = ['document', 'function', 'exception', 'alova', 'plugin', 'multi-menu', 'about'];
+
 /** create routes when the auth route mode is static */
 export function createStaticRoutes() {
   const constantRoutes: ElegantRoute[] = [];
@@ -199,6 +202,8 @@ export function createStaticRoutes() {
   const authRoutes: ElegantRoute[] = [];
 
   [...customRoutes, ...generatedRoutes].forEach(item => {
+    if (removedRoutes.includes(item.name)) return;
+
     if (item.meta?.constant) {
       constantRoutes.push(item);
     } else {

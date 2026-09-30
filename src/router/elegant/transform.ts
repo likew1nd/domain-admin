@@ -185,6 +185,14 @@ const routeMap: RouteMap = {
   "alova_request": "/alova/request",
   "alova_scenes": "/alova/scenes",
   "alova_user": "/alova/user",
+  "domain-generation": "/domain-generation",
+  "domain-generation_domain-dictionary": "/domain-generation/domain-dictionary",
+  "domain-generation_domain-generator": "/domain-generation/domain-generator",
+  "domain-management": "/domain-management",
+  "domain-management_expired": "/domain-management/expired",
+  "domain-management_kicked": "/domain-management/kicked",
+  "domain-management_qualified": "/domain-management/qualified",
+  "domain-management_unqualified": "/domain-management/unqualified",
   "function": "/function",
   "function_hide-child": "/function/hide-child",
   "function_hide-child_one": "/function/hide-child/one",
@@ -201,6 +209,7 @@ const routeMap: RouteMap = {
   "manage": "/manage",
   "manage_menu": "/manage/menu",
   "manage_role": "/manage/role",
+  "manage_setting": "/manage/setting",
   "manage_user": "/manage/user",
   "manage_user-detail": "/manage/user-detail/:id",
   "multi-menu": "/multi-menu",
@@ -233,6 +242,10 @@ const routeMap: RouteMap = {
   "plugin_tables_vtable": "/plugin/tables/vtable",
   "plugin_typeit": "/plugin/typeit",
   "plugin_video": "/plugin/video",
+  "runtime-control": "/runtime-control",
+  "runtime-control_expired-collection": "/runtime-control/expired-collection",
+  "runtime-control_monitor-tasks": "/runtime-control/monitor-tasks",
+  "runtime-control_query-tasks": "/runtime-control/query-tasks",
   "user-center": "/user-center"
 };
 

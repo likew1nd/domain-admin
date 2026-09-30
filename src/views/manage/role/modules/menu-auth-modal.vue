@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, shallowRef, watch } from 'vue';
-import { fetchGetAllPages, fetchGetMenuTree } from '@/service/api';
+import { computed, nextTick, ref, shallowRef, watch } from 'vue';
+import type { TreeInstance } from 'element-plus';
+import { fetchGetMenuTree, fetchGetRoleMenuAuth, fetchUpdateRoleMenuAuth } from '@/service/api';
 import { $t } from '@/locales';
 
 defineOptions({ name: 'MenuAuthModal' });
@@ -22,77 +23,64 @@ function closeModal() {
 
 const title = computed(() => $t('common.edit') + $t('page.manage.role.menuAuth'));
 
+const treeRef = ref<TreeInstance>();
+const loading = ref(false);
+const submitting = ref(false);
+
 const home = shallowRef('');
+const tree = shallowRef<Api.SystemManage.MenuTree[]>([]);
+/** 当前勾选的菜单（含半选的上级目录），用于计算可选首页 */
+const checkedIds = shallowRef<number[]>([]);
 
-async function getHome() {
-  // eslint-disable-next-line no-console
-  console.log(props.roleId);
-
-  home.value = 'home';
+function flattenTree(nodes: Api.SystemManage.MenuTree[]): Api.SystemManage.MenuTree[] {
+  return nodes.flatMap(node => [node, ...flattenTree(node.children || [])]);
 }
 
-const pages = shallowRef<string[]>([]);
+const allNodes = computed(() => flattenTree(tree.value));
 
-async function getPages() {
-  const { error, data } = await fetchGetAllPages();
-
-  if (!error) {
-    pages.value = data;
-  }
-}
-
-const pageSelectOptions = computed(() => {
-  const opts: CommonType.Option[] = pages.value.map(page => ({
-    label: page,
-    value: page
-  }));
-
-  return opts;
+/** 首页只能从已勾选的页面中选择 */
+const homeOptions = computed(() => {
+  const checked = new Set(checkedIds.value);
+  return allNodes.value
+    .filter(node => node.isPage && checked.has(node.id))
+    .map(node => ({ label: node.label, value: node.routeName }));
 });
 
-const tree = shallowRef<Api.SystemManage.MenuTree[]>([]);
-
-async function getTree() {
-  const { error, data } = await fetchGetMenuTree();
-
-  if (!error) {
-    tree.value = data;
+function syncCheckedIds() {
+  const instance = treeRef.value;
+  if (!instance) return;
+  checkedIds.value = [...instance.getCheckedKeys(), ...instance.getHalfCheckedKeys()] as number[];
+  if (home.value && !homeOptions.value.some(item => item.value === home.value)) {
+    home.value = '';
   }
 }
 
-const checks = shallowRef<number[]>([]);
+async function init() {
+  loading.value = true;
+  const [treeResult, authResult] = await Promise.all([fetchGetMenuTree(), fetchGetRoleMenuAuth(props.roleId)]);
+  loading.value = false;
+  if (treeResult.error || authResult.error) return;
 
-async function getChecks() {
-  // eslint-disable-next-line no-console
-  console.log(props.roleId);
-  // request
-  checks.value = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21];
+  tree.value = treeResult.data;
+  home.value = authResult.data.home;
+
+  // 只回填叶子节点，父级目录的勾选状态由子节点推导，避免部分授权的目录被显示为全选
+  const granted = new Set(authResult.data.menuIds);
+  const leafKeys = allNodes.value.filter(node => !node.children?.length && granted.has(node.id)).map(node => node.id);
+  await nextTick();
+  treeRef.value?.setCheckedKeys(leafKeys);
+  syncCheckedIds();
 }
 
-function checkChange(val: number) {
-  const idx = checks.value.indexOf(val);
-  if (idx === -1) {
-    checks.value.push(val);
-  } else {
-    checks.value.splice(idx, 1);
-  }
-}
+async function handleSubmit() {
+  syncCheckedIds();
+  submitting.value = true;
+  const { error } = await fetchUpdateRoleMenuAuth(props.roleId, { home: home.value, menuIds: checkedIds.value });
+  submitting.value = false;
+  if (error) return;
 
-function handleSubmit() {
-  // eslint-disable-next-line no-console
-  console.log(checks.value, props.roleId);
-  // request
-
-  window.$message?.success?.($t('common.modifySuccess'));
-
+  window.$message?.success($t('common.modifySuccess'));
   closeModal();
-}
-
-function init() {
-  getHome();
-  getPages();
-  getTree();
-  getChecks();
 }
 
 watch(visible, val => {
@@ -103,28 +91,30 @@ watch(visible, val => {
 </script>
 
 <template>
-  <ElDialog v-model="visible" :title="title" preset="card" class="w-480px">
-    <div class="flex-y-center gap-16px pb-12px">
-      <div>{{ $t('page.manage.menu.home') }}</div>
-      <ElSelect v-model="home" :options="pageSelectOptions" size="small" class="w-160px">
-        <ElOption v-for="{ value, label } in pageSelectOptions" :key="value" :value="value" :label="label"></ElOption>
-      </ElSelect>
+  <ElDialog v-model="visible" :title="title" class="w-480px">
+    <div v-loading="loading">
+      <div class="flex-y-center gap-16px pb-12px">
+        <div>{{ $t('page.manage.menu.home') }}</div>
+        <ElSelect v-model="home" size="small" clearable placeholder="默认首页" class="w-200px">
+          <ElOption v-for="{ value, label } in homeOptions" :key="value" :value="value" :label="label" />
+        </ElSelect>
+      </div>
+      <ElTree
+        ref="treeRef"
+        :data="tree"
+        node-key="id"
+        show-checkbox
+        default-expand-all
+        class="h-320px overflow-y-auto"
+        @check="syncCheckedIds"
+      />
     </div>
-    <ElTree
-      v-model:checked-keys="checks"
-      :data="tree"
-      node-key="id"
-      show-checkbox
-      class="h-280px overflow-y-auto"
-      :default-checked-keys="checks"
-      @check-change="checkChange"
-    />
     <template #footer>
       <ElSpace class="w-full justify-end">
-        <ElButton size="small" class="mt-16px" @click="closeModal">
+        <ElButton size="small" @click="closeModal">
           {{ $t('common.cancel') }}
         </ElButton>
-        <ElButton type="primary" size="small" class="mt-16px" @click="handleSubmit">
+        <ElButton type="primary" size="small" :loading="submitting" @click="handleSubmit">
           {{ $t('common.confirm') }}
         </ElButton>
       </ElSpace>

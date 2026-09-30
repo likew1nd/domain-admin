@@ -1,6 +1,19 @@
+<script setup lang="ts">
+import { useAppStore } from '@/store/modules/app';
+
+const appStore = useAppStore();
+</script>
+
 <template>
   <div class="app-logo">
+    <img
+      v-if="appStore.systemSettings.logo"
+      :src="appStore.systemSettings.logo"
+      class="size-full object-contain"
+      alt="logo"
+    />
     <svg
+      v-else
       width="100%"
       height="100%"
       version="1.1"

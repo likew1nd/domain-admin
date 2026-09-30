@@ -13,6 +13,7 @@ dist
 dist-ssr
 coverage
 *.local
+/data/
 
 /cypress/videos/
 /cypress/screenshots/
@@ -33,3 +34,7 @@ package-lock.json
 yarn.lock
 
 .VSCodeCounter
+
+# 本地调试产物
+/artifacts/
+/backend/backend/

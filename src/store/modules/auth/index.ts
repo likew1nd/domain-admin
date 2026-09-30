@@ -2,7 +2,7 @@ import { computed, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { defineStore } from 'pinia';
 import { useLoading } from '@sa/hooks';
-import { fetchGetUserInfo, fetchLogin } from '@/service/api';
+import { type CaptchaAnswer, fetchEmailLogin, fetchGetUserInfo, fetchLogin } from '@/service/api';
 import { useRouterPush } from '@/hooks/common/router';
 import { localStg } from '@/utils/storage';
 import { SetupStoreId } from '@/enum';
@@ -93,14 +93,28 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
    * @param userName User name
    * @param password Password
    * @param [redirect=true] Whether to redirect after login. Default is `true`
+   * @returns Whether the login succeeded
    */
-  async function login(userName: string, password: string, redirect = true) {
+  async function login(
+    userName: string,
+    password: string,
+    options: { redirect?: boolean; captcha?: CaptchaAnswer } = {}
+  ) {
+    return finishLogin(fetchLogin(userName, password, options.captcha), options.redirect ?? true);
+  }
+
+  async function loginByEmail(email: string, code: string) {
+    return finishLogin(fetchEmailLogin(email, code), true);
+  }
+
+  async function finishLogin(tokenRequest: ReturnType<typeof fetchLogin>, redirect: boolean): Promise<boolean> {
     startLoading();
 
-    const { data: loginToken, error } = await fetchLogin(userName, password);
+    const { data: loginToken, error } = await tokenRequest;
+    let pass = false;
 
     if (!error) {
-      const pass = await loginByToken(loginToken);
+      pass = await loginByToken(loginToken);
 
       if (pass) {
         // Check if the tab needs to be cleared
@@ -124,6 +138,8 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
     }
 
     endLoading();
+
+    return pass;
   }
 
   async function loginByToken(loginToken: Api.Auth.LoginToken) {
@@ -176,6 +192,7 @@ export const useAuthStore = defineStore(SetupStoreId.Auth, () => {
     loginLoading,
     resetStore,
     login,
+    loginByEmail,
     initUserInfo
   };
 });

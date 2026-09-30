@@ -39,6 +39,14 @@ declare module "@elegant-router/types" {
     "alova_request": "/alova/request";
     "alova_scenes": "/alova/scenes";
     "alova_user": "/alova/user";
+    "domain-generation": "/domain-generation";
+    "domain-generation_domain-dictionary": "/domain-generation/domain-dictionary";
+    "domain-generation_domain-generator": "/domain-generation/domain-generator";
+    "domain-management": "/domain-management";
+    "domain-management_expired": "/domain-management/expired";
+    "domain-management_kicked": "/domain-management/kicked";
+    "domain-management_qualified": "/domain-management/qualified";
+    "domain-management_unqualified": "/domain-management/unqualified";
     "function": "/function";
     "function_hide-child": "/function/hide-child";
     "function_hide-child_one": "/function/hide-child/one";
@@ -55,6 +63,7 @@ declare module "@elegant-router/types" {
     "manage": "/manage";
     "manage_menu": "/manage/menu";
     "manage_role": "/manage/role";
+    "manage_setting": "/manage/setting";
     "manage_user": "/manage/user";
     "manage_user-detail": "/manage/user-detail/:id";
     "multi-menu": "/multi-menu";
@@ -87,6 +96,10 @@ declare module "@elegant-router/types" {
     "plugin_tables_vtable": "/plugin/tables/vtable";
     "plugin_typeit": "/plugin/typeit";
     "plugin_video": "/plugin/video";
+    "runtime-control": "/runtime-control";
+    "runtime-control_expired-collection": "/runtime-control/expired-collection";
+    "runtime-control_monitor-tasks": "/runtime-control/monitor-tasks";
+    "runtime-control_query-tasks": "/runtime-control/query-tasks";
     "user-center": "/user-center";
   };
 
@@ -138,6 +151,8 @@ declare module "@elegant-router/types" {
     | "500"
     | "about"
     | "alova"
+    | "domain-generation"
+    | "domain-management"
     | "function"
     | "home"
     | "iframe-page"
@@ -145,6 +160,7 @@ declare module "@elegant-router/types" {
     | "manage"
     | "multi-menu"
     | "plugin"
+    | "runtime-control"
     | "user-center"
   >;
 
@@ -173,6 +189,12 @@ declare module "@elegant-router/types" {
     | "alova_request"
     | "alova_scenes"
     | "alova_user"
+    | "domain-generation_domain-dictionary"
+    | "domain-generation_domain-generator"
+    | "domain-management_expired"
+    | "domain-management_kicked"
+    | "domain-management_qualified"
+    | "domain-management_unqualified"
     | "function_hide-child_one"
     | "function_hide-child_three"
     | "function_hide-child_two"
@@ -184,6 +206,7 @@ declare module "@elegant-router/types" {
     | "home"
     | "manage_menu"
     | "manage_role"
+    | "manage_setting"
     | "manage_user-detail"
     | "manage_user"
     | "multi-menu_first_child"
@@ -207,6 +230,9 @@ declare module "@elegant-router/types" {
     | "plugin_tables_vtable"
     | "plugin_typeit"
     | "plugin_video"
+    | "runtime-control_expired-collection"
+    | "runtime-control_monitor-tasks"
+    | "runtime-control_query-tasks"
     | "user-center"
   >;
 

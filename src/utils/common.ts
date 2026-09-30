@@ -56,3 +56,18 @@ export function toggleHtmlClass(className: string) {
     remove
   };
 }
+
+/**
+ * Format an ISO datetime as local time, e.g. 2026-9-28 13:33:37
+ *
+ * Empty or unparsable values are returned as is
+ *
+ * @param value ISO datetime string
+ */
+export function formatDateTime(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const time = [date.getHours(), date.getMinutes(), date.getSeconds()].map(n => String(n).padStart(2, '0'));
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()} ${time.join(':')}`;
+}
