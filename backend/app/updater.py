@@ -1,8 +1,8 @@
 """版本检查与在线更新。
 
 当前版本来自镜像构建参数 APP_VERSION；最新版本读取 GitHub Releases。
-在线更新不直接操作 Docker：后端只在数据目录写入更新请求文件，由 compose 中的
-updater 容器（deploy/updater.sh）拉取新镜像并重建 app 容器，并回写状态和心跳文件。
+在线更新不直接操作 Docker：后端调用 compose 中 watchtower 的 HTTP API，由它拉取新镜像
+并按原配置重建 app 容器。后端随即被重启，因此是否成功以重启后的版本号是否变化来判断。
 """
 
 from __future__ import annotations
@@ -25,16 +25,14 @@ router = APIRouter(prefix="/api")
 APP_VERSION = os.getenv("APP_VERSION", "dev").strip() or "dev"
 APP_REPO = os.getenv("APP_REPO", "").strip()
 
-DATA_DIR = db.DB_PATH.parent
-REQUEST_FILE = DATA_DIR / ".update-request"
-STATUS_FILE = DATA_DIR / ".update-status"
-HEARTBEAT_FILE = DATA_DIR / ".updater-alive"
-LOG_FILE = DATA_DIR / "update.log"
+WATCHTOWER_URL = os.getenv("WATCHTOWER_URL", "").strip().rstrip("/")
+WATCHTOWER_TOKEN = os.getenv("WATCHTOWER_TOKEN", "").strip()
 
-# updater 每 5 秒写一次心跳，超过该时长视为未运行（非 Docker 部署时永远不存在）
-_HEARTBEAT_TIMEOUT = 30
-# 超过该时长仍为 running 视为更新器中途退出，允许重新发起
-_RUNNING_TIMEOUT = 600
+# 记录更新发起时的版本，重启后版本不同即为更新成功
+STATUS_FILE = db.DB_PATH.parent / ".update-status"
+
+# 超过该时长版本仍未变化视为更新失败，允许重新发起
+_RUNNING_TIMEOUT = 300
 _RELEASE_TTL = 600.0
 _VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
@@ -81,9 +79,11 @@ def _latest_release(refresh: bool) -> dict[str, Any]:
 
 
 def _updater_alive() -> bool:
+    if not WATCHTOWER_URL:
+        return False
     try:
-        return time.time() - HEARTBEAT_FILE.stat().st_mtime < _HEARTBEAT_TIMEOUT
-    except OSError:
+        return httpx.get(f"{WATCHTOWER_URL}/livez", timeout=2).status_code == 200
+    except httpx.HTTPError:
         return False
 
 
@@ -94,15 +94,12 @@ def _update_status() -> dict[str, Any]:
         return {"state": "idle", "time": 0}
     state = status.get("state", "idle")
     started = int(status.get("time") or 0)
-    if state == "running" and time.time() - started > _RUNNING_TIMEOUT:
-        state = "failed"
-    result: dict[str, Any] = {"state": state, "time": started}
-    if state == "failed":
-        try:
-            result["log"] = "\n".join(LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()[-30:])
-        except OSError:
-            result["log"] = ""
-    return result
+    if state == "running":
+        if status.get("from") != APP_VERSION:
+            state = "success"
+        elif time.time() - started > _RUNNING_TIMEOUT:
+            state = "failed"
+    return {"state": state, "time": started}
 
 
 @router.get("/system/version")
@@ -132,9 +129,26 @@ def start_update(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]
     if SUPER_ROLE not in user["roles"]:
         raise ApiError("只有超级管理员可以执行更新")
     if not _updater_alive():
-        raise ApiError("未检测到更新服务，请使用 Docker 一键部署方式，或在服务器上重新执行安装脚本")
+        raise ApiError("未检测到更新服务 watchtower，请使用仓库中的 docker-compose.yml 部署")
     if _update_status()["state"] == "running":
         raise ApiError("正在更新中，请稍候")
-    STATUS_FILE.write_text(json.dumps({"state": "running", "time": int(time.time())}), encoding="utf-8")
-    REQUEST_FILE.write_text(str(int(time.time())), encoding="utf-8")
+    try:
+        # async：watchtower 立即返回 202 并在后台更新，本进程随后会被它重启
+        response = httpx.post(
+            f"{WATCHTOWER_URL}/v1/update",
+            params={"async": "true"},
+            headers={"Authorization": f"Bearer {WATCHTOWER_TOKEN}"},
+            timeout=10,
+        )
+    except httpx.HTTPError as exc:
+        raise ApiError(f"调用更新服务失败：{exc}") from exc
+    if response.status_code == 401:
+        raise ApiError("更新服务令牌不一致，请确认 app 与 updater 使用同一个 UPDATE_TOKEN")
+    if response.status_code == 429:
+        raise ApiError("更新服务正忙，请稍后再试")
+    if response.status_code >= 300:
+        raise ApiError(f"更新服务返回错误（HTTP {response.status_code}）：{response.text[:200]}")
+    STATUS_FILE.write_text(
+        json.dumps({"state": "running", "time": int(time.time()), "from": APP_VERSION}), encoding="utf-8"
+    )
     return ok({"current": APP_VERSION})

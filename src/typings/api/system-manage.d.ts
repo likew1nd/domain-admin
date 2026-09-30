@@ -35,11 +35,10 @@ declare namespace Api {
     /** `smtpPassword` is omitted to keep the saved password */
     type SettingsEdit = Omit<Settings, 'hasSmtpPassword'> & { smtpPassword?: string };
 
-    /** `failed` means the last online update did not finish, `log` holds its tail */
+    /** `failed` means the version did not change within the update timeout */
     interface UpdateStatus {
       state: 'idle' | 'running' | 'success' | 'failed';
       time: number;
-      log?: string;
     }
 
     interface VersionInfo {

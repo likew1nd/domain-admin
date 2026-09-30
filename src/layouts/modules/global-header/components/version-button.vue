@@ -53,7 +53,7 @@ async function pollUpdate() {
     stopPolling();
     updating.value = false;
     info.value = data;
-    window.$message?.error('更新失败，请查看更新日志');
+    window.$message?.error('更新失败，可在服务器执行 docker logs domain-admin-updater 查看原因');
   }
 }
 
@@ -111,10 +111,11 @@ onMounted(() => {
       </div>
       <p v-if="info.checkError" class="m-0 text-12px text-orange-500">{{ info.checkError }}</p>
       <div v-if="info.hasUpdate && info.releaseNotes" class="release-notes">{{ info.releaseNotes }}</div>
-      <template v-if="info.updateStatus.state === 'failed' && info.updateStatus.log">
-        <span class="text-12px text-red-500">上次更新失败：</span>
-        <pre class="update-log">{{ info.updateStatus.log }}</pre>
-      </template>
+      <p v-if="info.updateStatus.state === 'failed'" class="m-0 text-12px text-red-500">
+        上次更新未完成，可在服务器执行
+        <code>docker logs domain-admin-updater</code>
+        查看原因
+      </p>
       <div class="flex justify-end gap-8px">
         <ElButton size="small" :loading="checking" :disabled="updating" @click="loadVersion(true)">检查更新</ElButton>
         <template v-if="info.hasUpdate && isSuper">
@@ -139,16 +140,5 @@ onMounted(() => {
   background: var(--el-fill-color-light);
   white-space: pre-wrap;
   font-size: 12px;
-}
-
-.update-log {
-  max-height: 160px;
-  margin: 0;
-  overflow: auto;
-  padding: 8px;
-  border-radius: 4px;
-  background: var(--el-fill-color-light);
-  white-space: pre-wrap;
-  font-size: 11px;
 }
 </style>

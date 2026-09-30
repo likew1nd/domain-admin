@@ -18,6 +18,14 @@ curl -fsSL https://raw.githubusercontent.com/likew1nd/domain-admin/main/deploy/i
 - 记得在云服务商安全组 / 宝塔「安全」中放行 8080 端口
 - 更换端口：`curl -fsSL ... | sudo PORT=9000 bash`，或修改 `/opt/domain-admin/.env` 中的 `PORT` 后执行 `cd /opt/domain-admin && docker compose up -d`
 
+### 宝塔「容器编排」部署
+
+不想执行脚本的话，可以在宝塔「Docker → 容器编排 → 添加」中，把 [deploy/docker-compose.yml](./deploy/docker-compose.yml) 的内容整段粘贴进去，点确定即可，无需修改。
+
+- 默认端口 8080；要换端口，在编排的「环境变量」中填 `PORT=9000`
+- 建议同时填 `UPDATE_TOKEN=任意长随机字符串`（在线更新的内部令牌，不对外暴露，不填也能用）
+- 数据保存在编排目录下的 `data` 文件夹（宝塔一般为 `/www/dk_project/dk_app/编排名/data`）
+
 ### 宝塔面板绑定域名（可选）
 
 1. 「网站 → 添加站点」，填写域名，PHP 版本选「纯静态」
@@ -28,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/likew1nd/domain-admin/main/deploy/i
 ## 更新
 
 - **后台在线更新**：右上角显示当前版本，有新版本时出现红点，超级管理员点击「立即更新」即可，约 1 分钟后页面自动刷新
-- **命令行更新**：`sudo bash /opt/domain-admin/install.sh update`
+- **命令行更新**：`sudo bash /opt/domain-admin/install.sh update`；容器编排部署的在宝塔编排页点「更新镜像」或执行 `docker compose pull && docker compose up -d`
 
 更新只替换程序镜像，数据不受影响。
 
@@ -50,6 +58,7 @@ curl -fsSL https://raw.githubusercontent.com/likew1nd/domain-admin/main/deploy/i
 cd /opt/domain-admin
 docker compose ps              # 查看状态
 docker compose logs -f app     # 查看日志
+docker logs domain-admin-updater  # 查看在线更新日志
 docker compose restart app     # 重启
 docker compose down            # 停止并移除容器（数据保留）
 ```

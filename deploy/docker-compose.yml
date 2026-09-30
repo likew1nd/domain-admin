@@ -1,45 +1,39 @@
-# 由 deploy/install.sh 下载到安装目录（默认 /opt/domain-admin），配置写在同目录的 .env 中
+# 域名管理系统
+# 用法一：宝塔「Docker → 容器编排 → 添加」，整段粘贴即可，无需修改
+# 用法二：放到任意目录执行 docker compose up -d
+# 数据保存在本文件同级的 data 目录，备份该目录即可
 name: domain-admin
+
+x-update-token: &update-token ${UPDATE_TOKEN:-domain-admin-update}
 
 services:
   app:
-    image: ${IMAGE:-ghcr.io/likew1nd/domain-admin:latest}
+    image: ghcr.io/likew1nd/domain-admin:latest
     container_name: domain-admin
     restart: unless-stopped
     ports:
       - "${PORT:-8080}:8000"
     environment:
-      TZ: ${TZ:-Asia/Shanghai}
+      TZ: Asia/Shanghai
+      WATCHTOWER_URL: http://domain-admin-updater:8080
+      WATCHTOWER_TOKEN: *update-token
     volumes:
       - ./data:/app/data
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
 
-  # 在线更新：后台点击“立即更新”后在 data 目录写入 .update-request，
-  # 这里拉取新镜像并重建 app 容器。需要与宿主机相同的目录路径，compose 才能解析 ./data
+  # 在线更新：后台点击「立即更新」后，由它拉取新镜像并按原配置重建 app 容器
   updater:
-    image: ${UPDATER_IMAGE:-docker:cli}
+    image: ghcr.io/nicholas-fedor/watchtower:1
     container_name: domain-admin-updater
     restart: unless-stopped
-    working_dir: ${APP_DIR:-/opt/domain-admin}
+    environment:
+      TZ: Asia/Shanghai
+      # 只管理带 enable 标签的容器（即 app），不会动服务器上的其他容器
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_HTTP_API_ENDPOINTS: update,health
+      WATCHTOWER_HTTP_API_TOKEN: *update-token
+      WATCHTOWER_CLEANUP: "true"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${APP_DIR:-/opt/domain-admin}:${APP_DIR:-/opt/domain-admin}
-    entrypoint: ["sh", "-c"]
-    command:
-      - |
-        mkdir -p data
-        while true; do
-          touch data/.updater-alive
-          if [ -f data/.update-request ]; then
-            rm -f data/.update-request
-            echo "==== $$(date '+%F %T') 开始更新" > data/update.log
-            if docker compose pull app >> data/update.log 2>&1 && docker compose up -d --no-deps app >> data/update.log 2>&1; then
-              echo "==== $$(date '+%F %T') 更新完成" >> data/update.log
-              echo "{\"state\":\"success\",\"time\":$$(date +%s)}" > data/.update-status
-              docker image prune -f >> data/update.log 2>&1 || true
-            else
-              echo "==== $$(date '+%F %T') 更新失败" >> data/update.log
-              echo "{\"state\":\"failed\",\"time\":$$(date +%s)}" > data/.update-status
-            fi
-          fi
-          sleep 5
-        done
+    # 不映射端口：更新接口只在两个容器之间的内部网络可访问

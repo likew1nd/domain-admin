@@ -45,13 +45,18 @@ download docker-compose.yml docker-compose.yml
 download install.sh install.sh
 chmod +x install.sh
 
+gen_token() { head -c 24 /dev/urandom | od -An -tx1 | tr -d " \n"; }
+
 if [ ! -f .env ]; then
   cat > .env <<ENV
 # 访问端口：浏览器访问 http://服务器IP:端口
 PORT=${PORT}
-APP_DIR=${APP_DIR}
-TZ=Asia/Shanghai
+# 后台在线更新调用 watchtower 的内部令牌
+UPDATE_TOKEN=$(gen_token)
 ENV
+elif ! grep -q '^UPDATE_TOKEN=' .env; then
+  # 旧版本安装升级：补充令牌
+  echo "UPDATE_TOKEN=$(gen_token)" >> .env
 fi
 
 info "拉取镜像并启动..."
