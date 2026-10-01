@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 import whois
 from whois.exceptions import WhoisDomainNotFoundError
@@ -87,10 +88,38 @@ def deletion_status(info: dict[str, Any]) -> str:
         return ""
 
 
-def lookup(domain: str) -> dict[str, Any]:
+def _lookup_socks(domain: str, proxy: str) -> Any:
+    """Use python-whois' parser with a per-client SOCKS5 socket factory."""
+    import socket
+    import socks
+
+    address = proxy if "://" in proxy else f"socks5h://{proxy}"
+    parsed = urlsplit(address)
+    if parsed.scheme.lower() not in {"socks5", "socks5h"} or not parsed.hostname or not parsed.port:
+        raise ValueError("WHOIS SOCKS5 代理格式无效")
+    username = unquote(parsed.username) if parsed.username else None
+    password = unquote(parsed.password) if parsed.password else None
+    rdns = parsed.scheme.lower() == "socks5h"
+
+    class ProxyNICClient(whois.NICClient):
+        def get_socket(self):
+            client = socks.socksocket(socket.AF_INET, socket.SOCK_STREAM)
+            client.set_proxy(socks.SOCKS5, parsed.hostname, parsed.port, rdns, username, password)
+            return client
+
+    client = ProxyNICClient()
+    text = client.whois_lookup(None, domain.encode("idna").decode("utf-8"), 0, ignore_socket_errors=False)
+    if not text:
+        raise RuntimeError("WHOIS 代理未返回数据")
+    entry = whois.WhoisEntry.load(domain, text)
+    entry["raw"] = text
+    return entry
+
+
+def lookup(domain: str, proxy: str | None = None) -> dict[str, Any]:
     """Run the blocking python-whois call in a worker thread."""
     try:
-        result = whois.whois(domain, inc_raw=True)
+        result = _lookup_socks(domain, proxy) if proxy else whois.whois(domain, inc_raw=True)
     except WhoisDomainNotFoundError as exc:
         raw = str(exc)
         if not _looks_available_text(raw):

@@ -4,6 +4,7 @@ import sys
 from unittest.mock import patch
 from datetime import date, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -27,6 +28,16 @@ class WhoisFilterTests(unittest.TestCase):
         self.assertTrue(match_filters(info, {"delete_type": "expired"})[0])
         self.assertFalse(match_filters(info, {"delete_type": "all", "expiration_start": "2020-01-01"})[0])
         self.assertEqual(QueryTaskManager._deletion_status(info), "可注册")
+
+    @patch(
+        "app.whois_client._lookup_socks",
+        return_value=SimpleNamespace(
+            expiration_date="2020-01-01", creation_date="2010-01-01", status="pendingDelete", raw="raw"
+        ),
+    )
+    def test_whois_proxy_is_forwarded(self, socks_lookup):
+        lookup("example.com", "socks5h://127.0.0.1:1080")
+        socks_lookup.assert_called_once_with("example.com", "socks5h://127.0.0.1:1080")
 
     def test_all_delete_types_keeps_date_filters(self):
         future = (date.today() + timedelta(days=30)).isoformat()

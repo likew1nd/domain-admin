@@ -29,6 +29,7 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   "domain-management_expired": () => import("@/views/domain-management/expired/index.vue"),
   "domain-management_kicked": () => import("@/views/domain-management/kicked/index.vue"),
   "domain-management_qualified": () => import("@/views/domain-management/qualified/index.vue"),
+  "domain-management_registered": () => import("@/views/domain-management/registered/index.vue"),
   "domain-management_unqualified": () => import("@/views/domain-management/unqualified/index.vue"),
   "function_hide-child_one": () => import("@/views/function/hide-child/one/index.vue"),
   "function_hide-child_three": () => import("@/views/function/hide-child/three/index.vue"),

@@ -245,7 +245,7 @@ const kpiCards = computed<KpiCard[]>(() => {
       value: reg.success,
       icon: 'mdi:trophy-outline',
       color: '#ff9d4d',
-      route: 'runtime-control_monitor-tasks',
+      route: 'domain-management_registered',
       extra: `共提交 ${fmt(reg.total)} 次，失败 ${fmt(reg.failed)} 次`
     }
   ];

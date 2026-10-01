@@ -46,6 +46,7 @@ declare module "@elegant-router/types" {
     "domain-management_expired": "/domain-management/expired";
     "domain-management_kicked": "/domain-management/kicked";
     "domain-management_qualified": "/domain-management/qualified";
+    "domain-management_registered": "/domain-management/registered";
     "domain-management_unqualified": "/domain-management/unqualified";
     "function": "/function";
     "function_hide-child": "/function/hide-child";
@@ -194,6 +195,7 @@ declare module "@elegant-router/types" {
     | "domain-management_expired"
     | "domain-management_kicked"
     | "domain-management_qualified"
+    | "domain-management_registered"
     | "domain-management_unqualified"
     | "function_hide-child_one"
     | "function_hide-child_three"

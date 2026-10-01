@@ -192,6 +192,7 @@ const routeMap: RouteMap = {
   "domain-management_expired": "/domain-management/expired",
   "domain-management_kicked": "/domain-management/kicked",
   "domain-management_qualified": "/domain-management/qualified",
+  "domain-management_registered": "/domain-management/registered",
   "domain-management_unqualified": "/domain-management/unqualified",
   "function": "/function",
   "function_hide-child": "/function/hide-child",

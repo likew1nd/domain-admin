@@ -187,6 +187,7 @@ const local: App.I18n.Schema = {
     'domain-management_qualified': '符合域名列表',
     'domain-management_unqualified': '不符合域名列表',
     'domain-management_kicked': '踢出域名列表',
+    'domain-management_registered': '注册成功列表',
     'runtime-control': '运行控制',
     'runtime-control_expired-collection': '过期数据采集',
     'runtime-control_query-tasks': '查询任务',

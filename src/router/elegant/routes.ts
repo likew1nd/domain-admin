@@ -171,6 +171,16 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       },
       {
+        name: 'domain-management_registered',
+        path: '/domain-management/registered',
+        component: 'view.domain-management_registered',
+        meta: {
+          title: 'domain-management_registered',
+          i18nKey: 'route.domain-management_registered',
+          icon: 'mdi:trophy-outline'
+        }
+      },
+      {
         name: 'domain-management_unqualified',
         path: '/domain-management/unqualified',
         component: 'view.domain-management_unqualified',

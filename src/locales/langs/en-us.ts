@@ -187,6 +187,7 @@ const local: App.I18n.Schema = {
     'domain-management_qualified': 'Qualified Domains',
     'domain-management_unqualified': 'Unqualified Domains',
     'domain-management_kicked': 'Kicked Domains',
+    'domain-management_registered': 'Registered Domains',
     'runtime-control': 'Runtime Control',
     'runtime-control_expired-collection': 'Expired Data Collection',
     'runtime-control_query-tasks': 'Query Tasks',

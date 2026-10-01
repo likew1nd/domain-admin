@@ -445,6 +445,33 @@ export interface KickedDomainPage {
   stats?: DomainListStats;
 }
 
+export interface RegisteredDomain {
+  id: number;
+  domain: string;
+  deletion_status: string;
+  creation_date: string;
+  expiration_date: string;
+  wechat_status: string;
+  qq_status: string;
+  pollution_status: string;
+  blocked_status: string;
+  blacklist_status: string;
+  filing_nature: string;
+  filing_info: string;
+  source: string | null;
+  registrar_name: string;
+  response: string;
+  registered_at: string;
+}
+
+export interface RegisteredDomainPage {
+  records: RegisteredDomain[];
+  current: number;
+  size: number;
+  total: number;
+  stats?: DomainListStats;
+}
+
 export function fetchRegistrarApis() {
   return domainRequest<RegistrarApi[]>('/registrar-apis');
 }
@@ -504,6 +531,21 @@ export function fetchKickedDomains(params: Record<string, string | number | unde
 
 export function clearKickedDomains() {
   return domainRequest<{ deleted: number }>('/kicked-domains', { method: 'DELETE' });
+}
+
+export function fetchRegisteredDomains(params: Record<string, string | number | undefined> = {}) {
+  const search = new URLSearchParams({
+    page: String(params.page || 1),
+    page_size: String(params.pageSize || 20)
+  });
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== '' && key !== 'page' && key !== 'pageSize') search.set(key, String(value));
+  });
+  return domainRequest<RegisteredDomainPage>(`/registered-domains?${search.toString()}`);
+}
+
+export function clearRegisteredDomains() {
+  return domainRequest<{ deleted: number }>('/registered-domains', { method: 'DELETE' });
 }
 
 export function resetDomainQueryTime() {

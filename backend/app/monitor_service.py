@@ -335,6 +335,8 @@ class MonitorManager:
                 "INSERT INTO registration_attempts (domain, registrar_api_id, status, response, attempted_at, completed_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (domain, config["id"], "success" if result.success else "failure", result.response, started, now()),
             )
+            if result.success:
+                self._record_registered(domain, config, result.response)
             self._log(
                 "info" if result.success else "warning",
                 "register",
@@ -380,8 +382,8 @@ class MonitorManager:
         )
 
     @staticmethod
-    def _kick(domain: str, reason: str, detail: str) -> None:
-        check = db.fetch_one(
+    def _check_snapshot(domain: str) -> dict[str, Any]:
+        return db.fetch_one(
             """
             SELECT deletion_status, creation_date, expiration_date, wechat_status,
                    qq_status, pollution_status, blocked_status, blacklist_status,
@@ -390,6 +392,40 @@ class MonitorManager:
             """,
             (domain,),
         ) or {}
+
+    @classmethod
+    def _record_registered(cls, domain: str, config: dict[str, Any], response: str) -> None:
+        check = cls._check_snapshot(domain)
+        db.execute(
+            """
+            INSERT OR REPLACE INTO registered_domains (
+                domain, registrar_api_id, registrar_name, response, registered_at,
+                deletion_status, creation_date, expiration_date, wechat_status, qq_status,
+                pollution_status, blocked_status, blacklist_status, filing_nature, filing_info
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                domain,
+                config["id"],
+                config["name"],
+                (response or "")[:4000],
+                now(),
+                check.get("deletion_status", ""),
+                check.get("creation_date", ""),
+                check.get("expiration_date", ""),
+                check.get("wechat_status", "否"),
+                check.get("qq_status", "否"),
+                check.get("pollution_status", "否"),
+                check.get("blocked_status", "否"),
+                check.get("blacklist_status", "否"),
+                check.get("filing_nature", ""),
+                check.get("filing_info", ""),
+            ),
+        )
+
+    @classmethod
+    def _kick(cls, domain: str, reason: str, detail: str) -> None:
+        check = cls._check_snapshot(domain)
         db.execute(
             """
             INSERT OR IGNORE INTO kicked_domains (

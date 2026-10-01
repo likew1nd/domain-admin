@@ -822,6 +822,108 @@ def clear_kicked_domains() -> dict[str, Any]:
     return ok({"deleted": int(row["total"] if row else 0)})
 
 
+REGISTERED_SNAPSHOT_FIELDS = (
+    "deletion_status",
+    "creation_date",
+    "expiration_date",
+    "wechat_status",
+    "qq_status",
+    "pollution_status",
+    "blocked_status",
+    "blacklist_status",
+    "filing_nature",
+    "filing_info",
+)
+
+
+@app.get("/api/registered-domains")
+def list_registered_domains(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    domain_composition: str | None = None,
+    length: str | None = None,
+    suffix: str | None = None,
+    keyword: str | None = None,
+    deletion_status: str | None = None,
+    registered_start: str | None = None,
+    registered_end: str | None = None,
+    wechat_status: str | None = None,
+    qq_status: str | None = None,
+    pollution_status: str | None = None,
+    blocked_status: str | None = None,
+    blacklist_status: str | None = None,
+    filing_nature: str | None = None,
+    with_stats: bool = False,
+) -> dict[str, Any]:
+    conditions = ["1 = 1"]
+    params: list[Any] = []
+    label_expression = "substr(r.domain, 1, length(r.domain) - instr(reverse(r.domain), '.'))"
+    if composition := parse_composition_filter(domain_composition):
+        condition, kinds = db.label_kind_condition(composition, f"label_kind_of({label_expression})")
+        conditions.append(condition)
+        params.extend(kinds)
+    if lengths := parse_length_filter(length):
+        conditions.append(f"length({label_expression}) IN ({','.join('?' for _ in lengths)})")
+        params.extend(lengths)
+    if suffixes := split_filter_values(suffix):
+        conditions.append("(" + " OR ".join("lower(r.domain) LIKE ?" for _ in suffixes) + ")")
+        params.extend(f"%.{item}" for item in suffixes)
+    if keyword:
+        keyword_fields = ["r.domain", "r.registrar_name", "r.filing_info", "d.source_name"]
+        conditions.append("(" + " OR ".join(f"{field} LIKE ?" for field in keyword_fields) + ")")
+        params.extend([f"%{keyword.strip()}%"] * len(keyword_fields))
+    for field, value in (
+        ("deletion_status", deletion_status),
+        ("wechat_status", wechat_status),
+        ("qq_status", qq_status),
+        ("pollution_status", pollution_status),
+        ("blocked_status", blocked_status),
+        ("blacklist_status", blacklist_status),
+        ("filing_nature", filing_nature),
+    ):
+        if value:
+            conditions.append(f"r.{field} = ?")
+            params.append(value)
+    if registered_start:
+        ensure_date_format(registered_start)
+        conditions.append("substr(r.registered_at, 1, 10) >= ?")
+        params.append(registered_start)
+    if registered_end:
+        ensure_date_format(registered_end)
+        conditions.append("substr(r.registered_at, 1, 10) <= ?")
+        params.append(registered_end)
+    where = " AND ".join(conditions)
+    joins = "FROM registered_domains r LEFT JOIN domains d ON d.domain = r.domain"
+    total = db.fetch_one(f"SELECT COUNT(*) AS total {joins} WHERE {where}", tuple(params))["total"]
+    rows = db.fetch_all(
+        f"""
+        SELECT r.id, r.domain, {', '.join(f'r.{field}' for field in REGISTERED_SNAPSHOT_FIELDS)},
+               d.source_name AS source, r.registrar_name, r.response, r.registered_at
+        {joins}
+        WHERE {where}
+        ORDER BY r.registered_at DESC, r.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (*params, page_size, (page - 1) * page_size),
+    )
+    data: dict[str, Any] = {"records": rows, "current": page, "size": page_size, "total": total}
+    if with_stats:
+        select = ", ".join(f"r.{field} AS {field}" for field in STAT_FIELDS)
+        data["stats"] = build_list_stats(
+            f"SELECT {select}, COUNT(*) AS count {joins} WHERE {where} {STAT_GROUP_BY}",
+            f"SELECT d.source_name AS label, COUNT(*) AS count {joins} WHERE {where} GROUP BY d.source_name ORDER BY count DESC",
+            tuple(params),
+        )
+    return ok(data)
+
+
+@app.delete("/api/registered-domains")
+def clear_registered_domains() -> dict[str, Any]:
+    row = db.fetch_one("SELECT COUNT(*) AS total FROM registered_domains")
+    db.execute("DELETE FROM registered_domains")
+    return ok({"deleted": int(row["total"] if row else 0)})
+
+
 @app.post("/api/collect")
 def collect(payload: CollectPayload) -> dict[str, Any]:
     ensure_date(payload.requested_date)

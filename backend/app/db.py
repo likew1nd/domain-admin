@@ -94,6 +94,9 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db() -> None:
     with _db_lock, get_connection() as connection:
+        has_registered_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registered_domains'"
+        ).fetchone()
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS sources (
@@ -317,6 +320,28 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_registration_attempts_domain ON registration_attempts(domain, id DESC);
 
+            -- 监控自动注册成功的域名，保存注册时的查询结果快照，清空符合域名后仍可查看
+            CREATE TABLE IF NOT EXISTS registered_domains (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain TEXT NOT NULL,
+                registrar_api_id INTEGER NOT NULL,
+                registrar_name TEXT NOT NULL DEFAULT '',
+                response TEXT NOT NULL DEFAULT '',
+                registered_at TEXT NOT NULL,
+                deletion_status TEXT NOT NULL DEFAULT '',
+                creation_date TEXT NOT NULL DEFAULT '',
+                expiration_date TEXT NOT NULL DEFAULT '',
+                wechat_status TEXT NOT NULL DEFAULT '否',
+                qq_status TEXT NOT NULL DEFAULT '否',
+                pollution_status TEXT NOT NULL DEFAULT '否',
+                blocked_status TEXT NOT NULL DEFAULT '否',
+                blacklist_status TEXT NOT NULL DEFAULT '否',
+                filing_nature TEXT NOT NULL DEFAULT '',
+                filing_info TEXT NOT NULL DEFAULT '',
+                UNIQUE (domain, registrar_api_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_registered_domains_registered_at ON registered_domains(registered_at DESC);
+
             CREATE TABLE IF NOT EXISTS monitor_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at TEXT NOT NULL,
@@ -446,6 +471,29 @@ def init_db() -> None:
             WHERE EXISTS (SELECT 1 FROM domain_checks WHERE domain = kicked_domains.domain)
             """
         )
+        if not has_registered_table:
+            # 首次建表时从历史抢注记录回填；之后用户清空列表不会被重新填入
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO registered_domains (
+                    domain, registrar_api_id, registrar_name, response, registered_at,
+                    deletion_status, creation_date, expiration_date, wechat_status, qq_status,
+                    pollution_status, blocked_status, blacklist_status, filing_nature, filing_info
+                )
+                SELECT a.domain, a.registrar_api_id, COALESCE(r.name, ''), a.response,
+                       COALESCE(NULLIF(a.completed_at, ''), a.attempted_at),
+                       COALESCE(c.deletion_status, ''), COALESCE(c.creation_date, ''),
+                       COALESCE(c.expiration_date, ''), COALESCE(c.wechat_status, '否'),
+                       COALESCE(c.qq_status, '否'), COALESCE(c.pollution_status, '否'),
+                       COALESCE(c.blocked_status, '否'), COALESCE(c.blacklist_status, '否'),
+                       COALESCE(c.filing_nature, ''), COALESCE(c.filing_info, '')
+                FROM registration_attempts a
+                LEFT JOIN registrar_apis r ON r.id = a.registrar_api_id
+                LEFT JOIN domain_checks c ON c.domain = a.domain
+                WHERE a.status = 'success'
+                ORDER BY a.id
+                """
+            )
 
 
 def fetch_all(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
