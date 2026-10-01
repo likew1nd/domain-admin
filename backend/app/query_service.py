@@ -465,13 +465,18 @@ class QueryTaskManager:
                     await proxy_pool.report(proxy, False)
                 last_error = exc
                 if task_id is not None:
+                    proxy_detail = (
+                        f"；代理：{proxy}"
+                        if proxy
+                        else ("；代理：获取失败" if proxy_pool and proxy_pool.mode != "direct" else "；代理：直连")
+                    )
                     QueryTaskManager._log(
                         task_id,
                         "WHOIS",
                         f"查询失败（第 {attempt + 1} 次）",
                         domain,
                         "error" if attempt + 1 >= max(1, retries) else "warning",
-                        str(exc),
+                        f"{exc}{proxy_detail}",
                     )
         raise last_error or RuntimeError("WHOIS 查询失败")
 
