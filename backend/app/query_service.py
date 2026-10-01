@@ -289,20 +289,17 @@ class QueryTaskManager:
                             (row["domain"], now(), task_id),
                         )
                         whois_info: dict[str, Any] = {}
-                        whois_proxy: str | None = None
-                        whois_proxy_reported = False
                         icp_result: dict[str, Any] = {"found": False, "queried": False, "data": {}, "records": []}
                         # 未勾选或未执行的检测项记为“未检测”
                         statuses = {column: "未检测" for column in STATUS_COLUMNS.values()}
                         try:
                             self._log(task_id, "WHOIS", "开始查询", row["domain"])
-                            whois_proxy = await proxy_pool.acquire() if "whois" in proxy_stages else None
                             whois_info = await self._lookup_whois(
-                                row["domain"], task["whois_retries"], task_id, whois_proxy
+                                row["domain"],
+                                task["whois_retries"],
+                                task_id,
+                                proxy_pool if "whois" in proxy_stages else None,
                             )
-                            if whois_proxy is not None:
-                                await proxy_pool.report(whois_proxy, True)
-                                whois_proxy_reported = True
                             self._log(
                                 task_id,
                                 "WHOIS",
@@ -421,8 +418,6 @@ class QueryTaskManager:
                             fatal_errors.append(str(exc))
                             stop_event.set()
                         except Exception as exc:
-                            if whois_proxy is not None and not whois_proxy_reported:
-                                await proxy_pool.report(whois_proxy, False)
                             self._log(task_id, "任务", "查询失败，等待重试", row["domain"], "error", str(exc))
                             await asyncio.sleep(2)
 
@@ -447,17 +442,27 @@ class QueryTaskManager:
 
     @staticmethod
     async def _lookup_whois(
-        domain: str, retries: int, task_id: int | None = None, proxy: str | None = None
+        domain: str,
+        retries: int,
+        task_id: int | None = None,
+        proxy_pool: ProxyLeasePool | None = None,
     ) -> dict[str, Any]:
         last_error: Exception | None = None
         for attempt in range(max(1, retries)):
+            proxy: str | None = None
             try:
+                if proxy_pool is not None:
+                    proxy = await proxy_pool.acquire()
                 lookup_call = (lookup, domain, proxy) if proxy else (lookup, domain)
                 result = await asyncio.wait_for(asyncio.to_thread(*lookup_call), timeout=30)
                 if not deletion_status(result):
                     raise RuntimeError("WHOIS 返回信息不足，无法确定域名状态")
+                if proxy is not None:
+                    await proxy_pool.report(proxy, True)
                 return result
             except Exception as exc:
+                if proxy is not None and proxy_pool is not None:
+                    await proxy_pool.report(proxy, False)
                 last_error = exc
                 if task_id is not None:
                     QueryTaskManager._log(

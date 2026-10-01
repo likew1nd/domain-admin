@@ -39,6 +39,29 @@ class WhoisFilterTests(unittest.TestCase):
         lookup("example.com", "socks5h://127.0.0.1:1080")
         socks_lookup.assert_called_once_with("example.com", "socks5h://127.0.0.1:1080")
 
+    @patch(
+        "app.query_service.lookup",
+        side_effect=[RuntimeError("bad proxy"), {"creation_date": "2020-01-01", "statuses": ["pendingDelete"]}],
+    )
+    def test_whois_retry_rotates_proxy(self, whois_lookup):
+        class Pool:
+            def __init__(self):
+                self.proxies = iter(["bad:1", "good:2"])
+                self.reports = []
+
+            async def acquire(self):
+                return next(self.proxies)
+
+            async def report(self, proxy, success):
+                self.reports.append((proxy, success))
+
+        pool = Pool()
+        result = asyncio.run(QueryTaskManager._lookup_whois("example.com", 2, proxy_pool=pool))
+
+        self.assertEqual(result["statuses"], ["pendingDelete"])
+        self.assertEqual(pool.reports, [("bad:1", False), ("good:2", True)])
+        self.assertEqual(whois_lookup.call_count, 2)
+
     def test_all_delete_types_keeps_date_filters(self):
         future = (date.today() + timedelta(days=30)).isoformat()
         info = {"expiration_date": future, "creation_date": "2020-01-01", "statuses": []}
