@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Deque
 
 import aiohttp
 
@@ -29,14 +30,16 @@ class ProxyLeasePool:
         self.max_requests = max(1, int(config.get("max_requests", 50) or 50))
         self.max_slots = 1 if self.mode == "tunnel" else max(1, int(max_slots or 1))
         self._slots: list[dict[str, Any]] = []
+        self._pending: Deque[str] = deque()
+        self._fetching = False
         self._condition = asyncio.Condition()
 
     async def acquire(self) -> str | None:
         if self.mode == "direct":
             return None
-        slot: dict[str, Any]
-        async with self._condition:
-            while True:
+        while True:
+            fetch_batch = False
+            async with self._condition:
                 slot = next(
                     (
                         item
@@ -50,30 +53,37 @@ class ProxyLeasePool:
                     slot["used"] += 1
                     self._save_stats()
                     return str(slot["proxy"])
-                if len(self._slots) < self.max_slots:
-                    slot = {"proxy": self.endpoint if self.mode == "tunnel" else "", "used": 1, "busy": True}
+                if self._pending and len(self._slots) < self.max_slots:
+                    slot = {"proxy": self._pending.popleft(), "used": 1, "busy": True}
                     self._slots.append(slot)
-                    break
-                # 添加超时防止死锁：如果 60 秒内没有可用 IP，抛出异常让调用方重试
-                try:
-                    await asyncio.wait_for(self._condition.wait(), timeout=60)
-                except asyncio.TimeoutError:
-                    raise RuntimeError("代理池等待超时：所有 IP 槽位都被占用，请增加线程数或减少并发")
+                    self._save_stats(proxy=slot["proxy"])
+                    return str(slot["proxy"])
+                if len(self._slots) < self.max_slots and not self._fetching:
+                    self._fetching = True
+                    fetch_batch = True
+                else:
+                    # 添加超时防止死锁：如果 60 秒内没有可用 IP，抛出异常让调用方重试
+                    try:
+                        await asyncio.wait_for(self._condition.wait(), timeout=60)
+                    except asyncio.TimeoutError:
+                        raise RuntimeError("代理池等待超时：所有 IP 槽位都被占用，请增加线程数或减少并发")
+            if not fetch_batch:
+                continue
 
-        try:
-            proxy = self.endpoint if self.mode == "tunnel" else await self._fetch_one()
-        except Exception:
+            try:
+                proxies = await self._fetch_batch() if self.mode == "api" else [self.endpoint]
+            except Exception:
+                async with self._condition:
+                    self._fetching = False
+                    self._save_stats()
+                    self._condition.notify_all()
+                raise
+
             async with self._condition:
-                if slot in self._slots:
-                    self._slots.remove(slot)
-                self._save_stats()
+                self._pending.extend(proxies)
+                self._fetching = False
+                self._save_stats(acquired=len(proxies), proxy=proxies[0] if proxies else None)
                 self._condition.notify_all()
-            raise
-
-        async with self._condition:
-            slot["proxy"] = proxy or ""
-            self._save_stats(acquired=self.mode == "api", proxy=slot["proxy"])
-            return str(slot["proxy"]) or None
 
     async def report(self, proxy: str | None, success: bool) -> None:
         if self.mode == "direct":
@@ -89,20 +99,22 @@ class ProxyLeasePool:
             self._save_stats()
             self._condition.notify_all()
 
-    def _save_stats(self, acquired: bool = False, proxy: str | None = None) -> None:
+    def _save_stats(self, acquired: int = 0, proxy: str | None = None) -> None:
         if self.mode != "api":
             return
-        available = sum(max(0, self.max_requests - int(slot["used"])) for slot in self._slots)
+        available = len(self._pending) * self.max_requests + sum(
+            max(0, self.max_requests - int(slot["used"])) for slot in self._slots
+        )
         current_ip = proxy or next((str(slot["proxy"]) for slot in self._slots if slot["proxy"]), "")
         if acquired:
             db.execute(
                 """
                 UPDATE query_tasks
-                SET proxy_acquired_count = proxy_acquired_count + 1,
+                SET proxy_acquired_count = proxy_acquired_count + ?,
                     proxy_current_available = ?, proxy_current_ip = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (available, current_ip, now(), self.task_id),
+                (acquired, available, current_ip, now(), self.task_id),
             )
             return
         db.execute(
@@ -110,7 +122,7 @@ class ProxyLeasePool:
             (available, current_ip, now(), self.task_id),
         )
 
-    async def _fetch_one(self) -> str:
+    async def _fetch_batch(self) -> list[str]:
         if not self.endpoint:
             raise RuntimeError("未配置代理 API")
         timeout = aiohttp.ClientTimeout(total=15)
@@ -122,16 +134,16 @@ class ProxyLeasePool:
         try:
             payload = json.loads(text)
             values = payload if isinstance(payload, list) else payload.get("data", payload.get("proxy", ""))
-            if isinstance(values, list):
-                text = "\n".join(str(item) for item in values)
-            else:
-                text = str(values)
         except json.JSONDecodeError:
-            pass
-        proxy = next((item.strip() for item in text.replace(",", "\n").splitlines() if item.strip()), "")
-        if not proxy:
+            values = text
+        if isinstance(values, list):
+            raw_values = [str(item) for item in values]
+        else:
+            raw_values = str(values).replace(",", "\n").splitlines()
+        proxies = list(dict.fromkeys(item.strip() for value in raw_values for item in value.splitlines() if item.strip()))
+        if not proxies:
             raise RuntimeError("代理 API 未返回 IP")
-        return proxy
+        return proxies
 
 
 class QueryTaskManager:
