@@ -54,7 +54,11 @@ class ProxyLeasePool:
                     slot = {"proxy": self.endpoint if self.mode == "tunnel" else "", "used": 1, "busy": True}
                     self._slots.append(slot)
                     break
-                await self._condition.wait()
+                # 添加超时防止死锁：如果 60 秒内没有可用 IP，抛出异常让调用方重试
+                try:
+                    await asyncio.wait_for(self._condition.wait(), timeout=60)
+                except asyncio.TimeoutError:
+                    raise RuntimeError("代理池等待超时：所有 IP 槽位都被占用，请增加线程数或减少并发")
 
         try:
             proxy = self.endpoint if self.mode == "tunnel" else await self._fetch_one()
@@ -267,163 +271,193 @@ class QueryTaskManager:
                     "已启用拦截检测",
                     detail="、".join(CHECKS[item][0] for item in intercept_items),
                 )
+            # 使用队列实现真正的并发处理，避免 gather() 阻塞
+            queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+            async def process(row: dict[str, Any]) -> None:
+                if stop_event.is_set():
+                    return
+                whois_info: dict[str, Any] = {}
+                icp_result: dict[str, Any] = {“found”: False, “queried”: False, “data”: {}, “records”: []}
+                # 未勾选或未执行的检测项记为”未检测”
+                statuses = {column: “未检测” for column in STATUS_COLUMNS.values()}
+                try:
+                    self._log(task_id, “WHOIS”, “开始查询”, row[“domain”])
+                    # 更新当前处理的域名（移到日志后面，避免阻塞）
+                    db.execute(
+                        “UPDATE query_tasks SET current_domain = ?, updated_at = ? WHERE id = ?”,
+                        (row[“domain”], now(), task_id),
+                    )
+                    whois_info = await self._lookup_whois(
+                        row[“domain”],
+                        task[“whois_retries”],
+                        task_id,
+                        proxy_pool if “whois” in proxy_stages else None,
+                    )
+                    self._log(
+                        task_id,
+                        “WHOIS”,
+                        “查询成功”,
+                        row[“domain”],
+                        detail=f”删除状态：{self._deletion_status(whois_info) or '未知'}”,
+                    )
+                    whois_ok, reason = match_filters(whois_info, filters)
+                    self._log(
+                        task_id,
+                        “WHOIS”,
+                        “通过筛选” if whois_ok else “未通过筛选”,
+                        row[“domain”],
+                        “info” if whois_ok else “warning”,
+                        reason,
+                    )
+                    exception_ok = False
+                    exception_reason = “”
+                    intercepted = False
+                    if whois_ok:
+                        for attempt in range(max(1, task[“icp_retries”])):
+                            self._log(
+                                task_id,
+                                “备案”,
+                                f”开始查询（第 {attempt + 1} 次）”,
+                                row[“domain”],
+                            )
+                            proxy = None
+                            try:
+                                icp_result[“queried”] = True
+                                proxy = await proxy_pool.acquire() if “icp” in proxy_stages else None
+                                icp_result = await client.query(row[“domain”], proxy)
+                                if proxy is not None:
+                                    await proxy_pool.report(proxy, True)
+                                self._log(
+                                    task_id,
+                                    “备案”,
+                                    “查询成功” if icp_result[“found”] else “查询完成，未发现备案”,
+                                    row[“domain”],
+                                    “info” if icp_result[“found”] else “warning”,
+                                    f”备案记录 {len(icp_result.get('records') or [])} 条”,
+                                )
+                                break
+                            except Exception as exc:
+                                if proxy is not None:
+                                    await proxy_pool.report(proxy, False)
+                                self._log(
+                                    task_id,
+                                    “备案”,
+                                    f”查询失败（第 {attempt + 1} 次）”,
+                                    row[“domain”],
+                                    “error” if attempt + 1 >= max(1, task[“icp_retries”]) else “warning”,
+                                    str(exc),
+                                )
+                                if attempt + 1 >= max(1, task[“icp_retries”]):
+                                    icp_result = {
+                                        “found”: False,
+                                        “queried”: True,
+                                        “data”: {},
+                                        “records”: [],
+                                        “error”: str(exc),
+                                    }
+                                    raise
+                        exception_ok, exception_reason = self._match_exception(row[“domain”], filters)
+                        # 备案之后再做拦截检测；未备案且不命中例外的域名必然不符合，不再消耗检测额度
+                        hits: list[str] = []
+                        if boce_client and (icp_result[“found”] or exception_ok):
+                            hits = await self._intercept_check(
+                                task,
+                                row[“domain”],
+                                intercept_items,
+                                boce_client,
+                                proxy_pool,
+                                proxy_stages,
+                                statuses,
+                            )
+                        intercepted = bool(hits)
+                        hit_text = “、”.join(hits)
+                        if icp_result[“found”] and not intercepted:
+                            reason = “WHOIS、备案与拦截检测均符合” if boce_client else “WHOIS 与 ICP 条件均符合”
+                        elif exception_ok:
+                            if icp_result[“found”]:
+                                prefix = f”已备案，拦截检测未通过（{hit_text}）”
+                            elif intercepted:
+                                prefix = f”WHOIS 通过，未备案，拦截检测未通过（{hit_text}）”
+                            else:
+                                prefix = “WHOIS 通过，未备案”
+                            reason = f”{prefix}，命中例外策略：{exception_reason}”
+                            self._log(
+                                task_id,
+                                “例外策略”,
+                                “命中例外策略，归类为符合”,
+                                row[“domain”],
+                                detail=exception_reason,
+                            )
+                        elif intercepted:
+                            reason = f”拦截检测未通过：{hit_text}”
+                        else:
+                            reason = “未查询到 ICP 备案”
+                    else:
+                        self._log(task_id, “备案”, “跳过备案查询”, row[“domain”], “warning”, reason)
+                    # 例外策略优先：命中例外即符合；否则需已备案且未被拦截
+                    passed = whois_ok and (exception_ok or (icp_result[“found”] and not intercepted))
+                    result = “qualified” if passed else “unqualified”
+                    self._save_result(task_id, row[“domain”], result, reason, whois_info, icp_result, statuses)
+                    self._log(
+                        task_id,
+                        “结果”,
+                        “已归类为符合” if result == “qualified” else “已归类为不符合”,
+                        row[“domain”],
+                        “info” if result == “qualified” else “warning”,
+                        reason,
+                    )
+                except BoceFatalError as exc:
+                    # 鉴权失败、波点不足时继续查询只会重复失败，直接终止任务
+                    fatal_errors.append(str(exc))
+                    stop_event.set()
+                except Exception as exc:
+                    self._log(task_id, “任务”, “查询失败，等待重试”, row[“domain”], “error”, str(exc))
+                    await asyncio.sleep(2)
+
+            async def worker() -> None:
+                “””工作协程：从队列中取出域名并处理”””
+                while True:
+                    row = await queue.get()
+                    if row is None:  # 结束信号
+                        queue.task_done()
+                        break
+                    try:
+                        await process(row)
+                    finally:
+                        queue.task_done()
+
+            # 启动工作线程
+            workers = [asyncio.create_task(worker()) for _ in range(task[“threads”])]
+
             while not stop_event.is_set():
-                candidates = self._candidates(filters, max(20, task["threads"] * 4))
+                candidates = self._candidates(filters, max(20, task[“threads”] * 4))
                 pending = self._count_candidates(filters)
-                processed = db.fetch_one("SELECT processed_count FROM query_tasks WHERE id = ?", (task_id,))["processed_count"]
+                processed = db.fetch_one(“SELECT processed_count FROM query_tasks WHERE id = ?”, (task_id,))[“processed_count”]
                 known_total = max(known_total, int(processed) + pending)
-                db.execute("UPDATE query_tasks SET total_count = ?, updated_at = ? WHERE id = ?", (known_total, now(), task_id))
+                db.execute(“UPDATE query_tasks SET total_count = ?, updated_at = ? WHERE id = ?”, (known_total, now(), task_id))
                 if not candidates:
-                    if not task["continuous"]:
+                    if not task[“continuous”]:
                         break
                     await asyncio.to_thread(stop_event.wait, 15)
                     continue
-                semaphore = asyncio.Semaphore(task["threads"])
 
-                async def process(row: dict[str, Any]) -> None:
-                    async with semaphore:
-                        if stop_event.is_set():
-                            return
-                        db.execute(
-                            "UPDATE query_tasks SET current_domain = ?, updated_at = ? WHERE id = ?",
-                            (row["domain"], now(), task_id),
-                        )
-                        whois_info: dict[str, Any] = {}
-                        icp_result: dict[str, Any] = {"found": False, "queried": False, "data": {}, "records": []}
-                        # 未勾选或未执行的检测项记为“未检测”
-                        statuses = {column: "未检测" for column in STATUS_COLUMNS.values()}
-                        try:
-                            self._log(task_id, "WHOIS", "开始查询", row["domain"])
-                            whois_info = await self._lookup_whois(
-                                row["domain"],
-                                task["whois_retries"],
-                                task_id,
-                                proxy_pool if "whois" in proxy_stages else None,
-                            )
-                            self._log(
-                                task_id,
-                                "WHOIS",
-                                "查询成功",
-                                row["domain"],
-                                detail=f"删除状态：{self._deletion_status(whois_info) or '未知'}",
-                            )
-                            whois_ok, reason = match_filters(whois_info, filters)
-                            self._log(
-                                task_id,
-                                "WHOIS",
-                                "通过筛选" if whois_ok else "未通过筛选",
-                                row["domain"],
-                                "info" if whois_ok else "warning",
-                                reason,
-                            )
-                            exception_ok = False
-                            exception_reason = ""
-                            intercepted = False
-                            if whois_ok:
-                                for attempt in range(max(1, task["icp_retries"])):
-                                    self._log(
-                                        task_id,
-                                        "备案",
-                                        f"开始查询（第 {attempt + 1} 次）",
-                                        row["domain"],
-                                    )
-                                    proxy = None
-                                    try:
-                                        icp_result["queried"] = True
-                                        proxy = await proxy_pool.acquire() if "icp" in proxy_stages else None
-                                        icp_result = await client.query(row["domain"], proxy)
-                                        if proxy is not None:
-                                            await proxy_pool.report(proxy, True)
-                                        self._log(
-                                            task_id,
-                                            "备案",
-                                            "查询成功" if icp_result["found"] else "查询完成，未发现备案",
-                                            row["domain"],
-                                            "info" if icp_result["found"] else "warning",
-                                            f"备案记录 {len(icp_result.get('records') or [])} 条",
-                                        )
-                                        break
-                                    except Exception as exc:
-                                        if proxy is not None:
-                                            await proxy_pool.report(proxy, False)
-                                        self._log(
-                                            task_id,
-                                            "备案",
-                                            f"查询失败（第 {attempt + 1} 次）",
-                                            row["domain"],
-                                            "error" if attempt + 1 >= max(1, task["icp_retries"]) else "warning",
-                                            str(exc),
-                                        )
-                                        if attempt + 1 >= max(1, task["icp_retries"]):
-                                            icp_result = {
-                                                "found": False,
-                                                "queried": True,
-                                                "data": {},
-                                                "records": [],
-                                                "error": str(exc),
-                                            }
-                                            raise
-                                exception_ok, exception_reason = self._match_exception(row["domain"], filters)
-                                # 备案之后再做拦截检测；未备案且不命中例外的域名必然不符合，不再消耗检测额度
-                                hits: list[str] = []
-                                if boce_client and (icp_result["found"] or exception_ok):
-                                    hits = await self._intercept_check(
-                                        task,
-                                        row["domain"],
-                                        intercept_items,
-                                        boce_client,
-                                        proxy_pool,
-                                        proxy_stages,
-                                        statuses,
-                                    )
-                                intercepted = bool(hits)
-                                hit_text = "、".join(hits)
-                                if icp_result["found"] and not intercepted:
-                                    reason = "WHOIS、备案与拦截检测均符合" if boce_client else "WHOIS 与 ICP 条件均符合"
-                                elif exception_ok:
-                                    if icp_result["found"]:
-                                        prefix = f"已备案，拦截检测未通过（{hit_text}）"
-                                    elif intercepted:
-                                        prefix = f"WHOIS 通过，未备案，拦截检测未通过（{hit_text}）"
-                                    else:
-                                        prefix = "WHOIS 通过，未备案"
-                                    reason = f"{prefix}，命中例外策略：{exception_reason}"
-                                    self._log(
-                                        task_id,
-                                        "例外策略",
-                                        "命中例外策略，归类为符合",
-                                        row["domain"],
-                                        detail=exception_reason,
-                                    )
-                                elif intercepted:
-                                    reason = f"拦截检测未通过：{hit_text}"
-                                else:
-                                    reason = "未查询到 ICP 备案"
-                            else:
-                                self._log(task_id, "备案", "跳过备案查询", row["domain"], "warning", reason)
-                            # 例外策略优先：命中例外即符合；否则需已备案且未被拦截
-                            passed = whois_ok and (exception_ok or (icp_result["found"] and not intercepted))
-                            result = "qualified" if passed else "unqualified"
-                            self._save_result(task_id, row["domain"], result, reason, whois_info, icp_result, statuses)
-                            self._log(
-                                task_id,
-                                "结果",
-                                "已归类为符合" if result == "qualified" else "已归类为不符合",
-                                row["domain"],
-                                "info" if result == "qualified" else "warning",
-                                reason,
-                            )
-                        except BoceFatalError as exc:
-                            # 鉴权失败、波点不足时继续查询只会重复失败，直接终止任务
-                            fatal_errors.append(str(exc))
-                            stop_event.set()
-                        except Exception as exc:
-                            self._log(task_id, "任务", "查询失败，等待重试", row["domain"], "error", str(exc))
-                            await asyncio.sleep(2)
+                # 将候选域名加入队列
+                for row in candidates:
+                    await queue.put(row)
 
-                await asyncio.gather(*(process(row) for row in candidates))
+                # 等待当前批次处理完成
+                await queue.join()
+
                 if fatal_errors:
                     raise RuntimeError(fatal_errors[0])
+
+            # 发送结束信号给所有worker
+            for _ in range(task[“threads”]):
+                await queue.put(None)
+
+            # 等待所有worker结束
+            await asyncio.gather(*workers)
             final_status = "stopped" if stop_event.is_set() else "completed"
             db.execute(
                 "UPDATE query_tasks SET status = ?, finished_at = ?, current_domain = '', updated_at = ? WHERE id = ?",
@@ -450,9 +484,40 @@ class QueryTaskManager:
         last_error: Exception | None = None
         for attempt in range(max(1, retries)):
             proxy: str | None = None
+            proxy_acquire_failed = False
             try:
                 if proxy_pool is not None:
-                    proxy = await proxy_pool.acquire()
+                    if task_id is not None:
+                        QueryTaskManager._log(
+                            task_id,
+                            "代理池",
+                            f"正在获取代理 IP（第 {attempt + 1} 次尝试）",
+                            domain,
+                            "info",
+                        )
+                    try:
+                        proxy = await proxy_pool.acquire()
+                        if task_id is not None and proxy:
+                            QueryTaskManager._log(
+                                task_id,
+                                "代理池",
+                                f"已获取代理 IP（第 {attempt + 1} 次尝试）",
+                                domain,
+                                "info",
+                                f"代理：{proxy}",
+                            )
+                    except Exception as proxy_exc:
+                        proxy_acquire_failed = True
+                        if task_id is not None:
+                            QueryTaskManager._log(
+                                task_id,
+                                "代理池",
+                                f"获取代理 IP 失败（第 {attempt + 1} 次尝试）",
+                                domain,
+                                "error",
+                                str(proxy_exc),
+                            )
+                        raise
                 lookup_call = (lookup, domain, proxy) if proxy else (lookup, domain)
                 result = await asyncio.wait_for(asyncio.to_thread(*lookup_call), timeout=30)
                 if not deletion_status(result):
@@ -464,7 +529,7 @@ class QueryTaskManager:
                 if proxy is not None and proxy_pool is not None:
                     await proxy_pool.report(proxy, False)
                 last_error = exc
-                if task_id is not None:
+                if task_id is not None and not proxy_acquire_failed:
                     proxy_detail = (
                         f"；代理：{proxy}"
                         if proxy
@@ -478,6 +543,9 @@ class QueryTaskManager:
                         "error" if attempt + 1 >= max(1, retries) else "warning",
                         f"{exc}{proxy_detail}",
                     )
+                # 如果是代理池超时，不再继续重试（因为重试也会卡住）
+                if "代理池等待超时" in str(exc):
+                    raise
         raise last_error or RuntimeError("WHOIS 查询失败")
 
     @staticmethod
