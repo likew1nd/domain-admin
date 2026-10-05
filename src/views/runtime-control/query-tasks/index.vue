@@ -84,6 +84,8 @@ function createExceptionSchemeDraft(scheme: QueryExceptionScheme, index: number)
 }
 
 const exceptionSchemeDrafts = ref<ExceptionSchemeDraft[]>([createExceptionSchemeDraft(createExceptionScheme(), 1)]);
+const activeExceptionSchemeIndex = ref(0);
+const activeExceptionScheme = computed(() => exceptionSchemeDrafts.value[activeExceptionSchemeIndex.value]);
 const defaultForm: CreateQueryTaskPayload = {
   domain_info_source: 'whois',
   apihz_id: '',
@@ -304,17 +306,28 @@ function syncExceptionSchemes() {
 }
 
 function addExceptionScheme() {
-  exceptionSchemeDrafts.value.push(
-    createExceptionSchemeDraft(
-      createExceptionScheme(exceptionSchemeDrafts.value.length + 1),
-      exceptionSchemeDrafts.value.length + 1
-    )
-  );
+  const newIndex = exceptionSchemeDrafts.value.length;
+  exceptionSchemeDrafts.value.push(createExceptionSchemeDraft(createExceptionScheme(newIndex + 1), newIndex + 1));
+  activeExceptionSchemeIndex.value = newIndex;
 }
 
 function removeExceptionScheme(index: number) {
   if (exceptionSchemeDrafts.value.length <= 1) return;
   exceptionSchemeDrafts.value.splice(index, 1);
+  if (activeExceptionSchemeIndex.value > index) activeExceptionSchemeIndex.value -= 1;
+  else if (activeExceptionSchemeIndex.value === index) {
+    activeExceptionSchemeIndex.value = Math.min(index, exceptionSchemeDrafts.value.length - 1);
+  }
+}
+
+function getSchemeSummary(scheme: ExceptionSchemeDraft): string {
+  const parts: string[] = [];
+  if (scheme.lengths) parts.push(`长度:${scheme.lengths}`);
+  if (scheme.suffixes) parts.push(`后缀:${scheme.suffixes}`);
+  if (scheme.patterns) parts.push(`模式:${scheme.patterns}`);
+  if (scheme.contains) parts.push(`包含:${scheme.contains}`);
+  if (scheme.exclude_chars) parts.push(`排除:${scheme.exclude_chars}`);
+  return parts.length ? parts.join(' · ') : '未配置';
 }
 
 function retryLabel(key: string) {
@@ -324,6 +337,7 @@ function retryLabel(key: string) {
 function restoreDefaults() {
   Object.assign(form, freshForm());
   exceptionSchemeDrafts.value = [createExceptionSchemeDraft(createExceptionScheme(), 1)];
+  activeExceptionSchemeIndex.value = 0;
   lengthInput.value = '';
   excludeCharsInput.value = '';
   apihzKeyInput.value = '';
@@ -387,6 +401,7 @@ function applySavedSettings(settings: CreateQueryTaskPayload) {
   exceptionSchemeDrafts.value = form.exceptions.schemes.map((scheme, index) =>
     createExceptionSchemeDraft(scheme, index + 1)
   );
+  activeExceptionSchemeIndex.value = 0;
   lengthInput.value = form.lengths.join(',');
   excludeCharsInput.value = form.exclude_chars.join(',');
   registrationRange.value =
@@ -994,61 +1009,134 @@ onBeforeUnmount(() => {
                   WHOIS
                   条件必须先通过；启用的任一方案命中后，即使未备案或已拦截也会进入符合域名列表。方案内可选择“或”或“且”逻辑。
                 </div>
-                <div
-                  v-for="(scheme, index) in exceptionSchemeDrafts"
-                  :key="index"
-                  class="mb-12px border border-gray-200 rounded-6px p-12px dark:border-gray-700"
-                >
-                  <div class="mb-8px flex flex-wrap items-center gap-8px">
-                    <ElInput v-model="scheme.name" class="w-180px" placeholder="方案名称" />
-                    <ElSwitch v-model="scheme.enabled" active-text="启用" inactive-text="关闭" />
-                    <ElRadioGroup v-model="scheme.logic" size="small">
-                      <ElRadioButton label="or">或</ElRadioButton>
-                      <ElRadioButton label="and">且</ElRadioButton>
-                    </ElRadioGroup>
-                    <ElButton
-                      v-if="exceptionSchemeDrafts.length > 1"
-                      text
-                      type="danger"
-                      @click="removeExceptionScheme(index)"
-                    >
-                      删除方案
-                    </ElButton>
+                <div v-if="activeExceptionScheme" class="grid gap-12px lg:grid-cols-[260px_minmax(0,1fr)]">
+                  <div class="min-w-0">
+                    <div class="h-320px overflow-y-auto border border-gray-200 rounded-6px p-4px dark:border-gray-700">
+                      <div class="grid gap-4px">
+                        <button
+                          v-for="(scheme, index) in exceptionSchemeDrafts"
+                          :key="index"
+                          type="button"
+                          class="w-full border border-transparent rounded-4px bg-transparent px-8px py-8px text-left transition-colors"
+                          :class="
+                            activeExceptionSchemeIndex === index
+                              ? 'border-primary bg-primary/8'
+                              : 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                          "
+                          :aria-current="activeExceptionSchemeIndex === index ? 'true' : undefined"
+                          @click="activeExceptionSchemeIndex = index"
+                        >
+                          <div class="flex items-center gap-6px">
+                            <span class="min-w-0 flex-1 truncate text-13px font-medium">
+                              {{ scheme.name || `方案 ${index + 1}` }}
+                            </span>
+                            <ElTag size="small" :type="scheme.enabled ? 'success' : 'info'">
+                              {{ scheme.enabled ? '启用' : '停用' }}
+                            </ElTag>
+                          </div>
+                          <div class="mt-4px truncate text-12px text-gray-500">
+                            {{ getSchemeSummary(scheme) }}
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+                    <ElButton class="mt-8px w-full" plain @click="addExceptionScheme">新增例外方案</ElButton>
                   </div>
-                  <ElRow :gutter="16">
-                    <ElCol :lg="6" :md="12" :sm="24">
-                      <ElFormItem label="长度">
-                        <ElInput v-model="scheme.lengths" class="w-full" placeholder="如 1-4、8" clearable />
-                      </ElFormItem>
-                    </ElCol>
-                    <ElCol :lg="6" :md="12" :sm="24">
-                      <ElFormItem label="后缀">
-                        <ElInput v-model="scheme.suffixes" class="w-full" placeholder="如 cn,com" clearable />
-                      </ElFormItem>
-                    </ElCol>
-                    <ElCol :lg="6" :md="12" :sm="24">
-                      <ElFormItem label="包含字符">
-                        <ElInput v-model="scheme.contains" class="w-full" placeholder="如 ai,88" clearable />
-                      </ElFormItem>
-                    </ElCol>
-                    <ElCol :lg="6" :md="12" :sm="24">
-                      <ElFormItem label="重复模式">
-                        <ElInput v-model="scheme.patterns" class="w-full" placeholder="如 ABAB,ABCABC" clearable />
-                      </ElFormItem>
-                    </ElCol>
-                    <ElCol :lg="6" :md="12" :sm="24">
-                      <ElFormItem label="排除字符">
-                        <ElInput v-model="scheme.exclude_chars" class="w-full" placeholder="如 0,4,8" clearable />
-                      </ElFormItem>
-                    </ElCol>
-                  </ElRow>
-                  <div class="text-12px text-gray-400">
-                    方案内的多个条件按“{{
-                      scheme.logic === 'and' ? '且' : '或'
-                    }}”判断；排除字符命中时方案直接不匹配；多个方案之间按“或”判断。重复模式仅支持大写字母。
+
+                  <div class="min-w-0">
+                    <ElRow :gutter="16">
+                      <ElCol :lg="8" :md="12" :sm="24">
+                        <ElFormItem label="方案名称">
+                          <ElInput v-model="activeExceptionScheme.name" placeholder="方案名称" />
+                        </ElFormItem>
+                      </ElCol>
+                      <ElCol :lg="8" :md="12" :sm="24">
+                        <ElFormItem label="匹配逻辑">
+                          <ElRadioGroup v-model="activeExceptionScheme.logic">
+                            <ElRadioButton label="or">或</ElRadioButton>
+                            <ElRadioButton label="and">且</ElRadioButton>
+                          </ElRadioGroup>
+                        </ElFormItem>
+                      </ElCol>
+                      <ElCol :lg="8" :md="12" :sm="24">
+                        <ElFormItem label="状态">
+                          <div class="h-32px flex items-center gap-6px">
+                            <ElSwitch v-model="activeExceptionScheme.enabled" size="small" />
+                            <span class="text-12px text-gray-500">
+                              {{ activeExceptionScheme.enabled ? '启用' : '停用' }}
+                            </span>
+                            <ElButton
+                              v-if="exceptionSchemeDrafts.length > 1"
+                              text
+                              type="danger"
+                              size="small"
+                              @click="removeExceptionScheme(activeExceptionSchemeIndex)"
+                            >
+                              删除
+                            </ElButton>
+                          </div>
+                        </ElFormItem>
+                      </ElCol>
+                    </ElRow>
+                    <ElRow :gutter="16">
+                      <ElCol :lg="8" :md="12" :sm="24">
+                        <ElFormItem label="长度">
+                          <ElInput
+                            v-model="activeExceptionScheme.lengths"
+                            class="w-full"
+                            placeholder="如 1-4、8"
+                            clearable
+                          />
+                        </ElFormItem>
+                      </ElCol>
+                      <ElCol :lg="8" :md="12" :sm="24">
+                        <ElFormItem label="后缀">
+                          <ElInput
+                            v-model="activeExceptionScheme.suffixes"
+                            class="w-full"
+                            placeholder="如 cn,com"
+                            clearable
+                          />
+                        </ElFormItem>
+                      </ElCol>
+                      <ElCol :lg="8" :md="12" :sm="24">
+                        <ElFormItem label="包含字符">
+                          <ElInput
+                            v-model="activeExceptionScheme.contains"
+                            class="w-full"
+                            placeholder="如 ai,88"
+                            clearable
+                          />
+                        </ElFormItem>
+                      </ElCol>
+                      <ElCol :lg="8" :md="12" :sm="24">
+                        <ElFormItem label="重复模式">
+                          <ElInput
+                            v-model="activeExceptionScheme.patterns"
+                            class="w-full"
+                            placeholder="如 ABAB,ABCABC"
+                            clearable
+                          />
+                        </ElFormItem>
+                      </ElCol>
+                      <ElCol :lg="8" :md="12" :sm="24">
+                        <ElFormItem label="排除字符">
+                          <ElInput
+                            v-model="activeExceptionScheme.exclude_chars"
+                            class="w-full"
+                            placeholder="如 0,4,8"
+                            clearable
+                          />
+                        </ElFormItem>
+                      </ElCol>
+                    </ElRow>
+                    <div class="text-12px text-gray-400">
+                      方案内的多个条件按“{{
+                        activeExceptionScheme.logic === 'and' ? '且' : '或'
+                      }}”判断；排除字符命中时方案直接不匹配；多个方案之间按“或”判断。重复模式仅支持大写字母。
+                    </div>
                   </div>
                 </div>
-                <ElButton type="primary" plain @click="addExceptionScheme">新增例外方案</ElButton>
 
                 <ElDivider content-position="left">{{ $t('page.runtime.queryTasks.strategyTitle') }}</ElDivider>
                 <ElFormItem label="重试次数">
