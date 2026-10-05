@@ -167,6 +167,8 @@ def init_db() -> None:
                 name TEXT NOT NULL,
                 filters_json TEXT NOT NULL,
                 proxy_json TEXT NOT NULL,
+                domain_info_source TEXT NOT NULL DEFAULT 'whois',
+                apihz_id TEXT NOT NULL DEFAULT '',
                 threads INTEGER NOT NULL DEFAULT 5,
                 whois_retries INTEGER NOT NULL DEFAULT 2,
                 icp_retries INTEGER NOT NULL DEFAULT 2,
@@ -412,6 +414,8 @@ def init_db() -> None:
             connection.execute("ALTER TABLE schedules ADD COLUMN suffixes_json TEXT NOT NULL DEFAULT '[]'")
         query_task_columns = {row["name"] for row in connection.execute("PRAGMA table_info(query_tasks)").fetchall()}
         for name, definition in {
+            "domain_info_source": "TEXT NOT NULL DEFAULT 'whois'",
+            "apihz_id": "TEXT NOT NULL DEFAULT ''",
             "whois_retries": "INTEGER NOT NULL DEFAULT 2",
             "icp_retries": "INTEGER NOT NULL DEFAULT 2",
             "qq_retries": "INTEGER NOT NULL DEFAULT 1",

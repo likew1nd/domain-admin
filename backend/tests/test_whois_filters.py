@@ -4,19 +4,19 @@ import sys
 from unittest.mock import patch
 from datetime import date, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from whois.exceptions import WhoisDomainNotFoundError
 
-from app.whois_client import lookup, match_filters
+from app.whois_client import RdapError, lookup, match_filters
 from app.query_service import QueryTaskManager
 
 
 class WhoisFilterTests(unittest.TestCase):
     @patch("app.whois_client.whois.whois", side_effect=WhoisDomainNotFoundError('No match for "example.com"'))
-    def test_whois_not_found_is_available(self, _whois):
+    @patch("app.whois_client._lookup_rdap", side_effect=RdapError("RDAP unavailable"))
+    def test_whois_not_found_is_available(self, _rdap, _whois):
         info = lookup("example.com")
 
         self.assertTrue(info["available"])
@@ -29,19 +29,17 @@ class WhoisFilterTests(unittest.TestCase):
         self.assertFalse(match_filters(info, {"delete_type": "all", "expiration_start": "2020-01-01"})[0])
         self.assertEqual(QueryTaskManager._deletion_status(info), "可注册")
 
-    @patch(
-        "app.whois_client._lookup_socks",
-        return_value=SimpleNamespace(
-            expiration_date="2020-01-01", creation_date="2010-01-01", status="pendingDelete", raw="raw"
-        ),
-    )
-    def test_whois_proxy_is_forwarded(self, socks_lookup):
-        lookup("example.com", "socks5h://127.0.0.1:1080")
-        socks_lookup.assert_called_once_with("example.com", "socks5h://127.0.0.1:1080")
+    @patch("app.whois_client._lookup_rdap", return_value={"source": "rdap"})
+    def test_rdap_proxy_is_forwarded(self, rdap_lookup):
+        lookup("example.com", "http://127.0.0.1:8080")
+        rdap_lookup.assert_called_once_with("example.com", "http://127.0.0.1:8080")
 
     @patch(
         "app.query_service.lookup",
-        side_effect=[RuntimeError("bad proxy"), {"creation_date": "2020-01-01", "statuses": ["pendingDelete"]}],
+                side_effect=[
+                    RuntimeError("bad proxy"),
+                    {"creation_date": "2020-01-01", "statuses": ["pendingDelete"], "source": "rdap"},
+                ],
     )
     def test_whois_retry_rotates_proxy(self, whois_lookup):
         class Pool:
@@ -84,6 +82,36 @@ class WhoisFilterTests(unittest.TestCase):
             ("查询失败", "验证码识别失败"),
         )
         self.assertEqual(QueryTaskManager._filing_info({"queried": True, "records": [{}]}), ("已备案", ""))
+
+    def test_exception_schemes_support_independent_switches_and_and_or_logic(self):
+        filters = {
+            "exceptions": {
+                "schemes": [
+                    {
+                        "name": "四位 CN",
+                        "enabled": True,
+                        "logic": "and",
+                        "lengths": [4],
+                        "suffixes": ["cn"],
+                    },
+                    {
+                        "name": "关闭方案",
+                        "enabled": False,
+                        "logic": "or",
+                        "contains": ["xyz"],
+                    },
+                ]
+            }
+        }
+        self.assertEqual(QueryTaskManager._match_exception("abcd.cn", filters), (True, "四位 CN：长度 4、后缀 .cn"))
+        self.assertEqual(QueryTaskManager._match_exception("abcd.com", filters), (False, ""))
+
+        filters["exceptions"]["schemes"][0]["logic"] = "or"
+        self.assertEqual(QueryTaskManager._match_exception("abcd.com", filters)[0], True)
+
+    def test_exception_legacy_shape_remains_supported(self):
+        filters = {"exceptions": {"enabled": True, "contains": ["abc"]}}
+        self.assertEqual(QueryTaskManager._match_exception("abc.cn", filters), (True, "包含字符 abc"))
 
     @patch("app.query_service.lookup", return_value={"expiration_date": "", "creation_date": "", "statuses": []})
     def test_empty_whois_result_is_retried_and_not_accepted(self, _lookup):

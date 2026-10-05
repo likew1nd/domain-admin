@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from . import boce_client, dashboard, db, system_manage, updater
+from . import apihz_client, boce_client, dashboard, db, system_manage, updater
 from .collector import queue_date, queue_file, queue_latest, queue_west_suffixes, shutdown_executor
 from .crypto import decrypt_cookie, encrypt_cookie
 from .query_service import query_manager
@@ -184,12 +184,24 @@ class SchedulePayload(BaseModel):
         return value
 
 
+class QueryExceptionSchemePayload(BaseModel):
+    name: str = Field(default="", max_length=80)
+    enabled: bool = True
+    logic: Literal["or", "and"] = "or"
+    lengths: list[int] = Field(default_factory=list, max_length=63)
+    suffixes: list[str] = Field(default_factory=list, max_length=100)
+    patterns: list[str] = Field(default_factory=list, max_length=20)
+    contains: list[str] = Field(default_factory=list, max_length=50)
+
+
 class QueryExceptionPayload(BaseModel):
+    # 保留旧字段，兼容已保存的单方案配置；新配置使用 schemes。
     enabled: bool = False
     lengths: list[int] = Field(default_factory=list, max_length=63)
     suffixes: list[str] = Field(default_factory=list, max_length=100)
     patterns: list[str] = Field(default_factory=list, max_length=20)
     contains: list[str] = Field(default_factory=list, max_length=50)
+    schemes: list[QueryExceptionSchemePayload] = Field(default_factory=list, max_length=20)
 
 
 def _composition_before(value: Any) -> Any:
@@ -198,6 +210,9 @@ def _composition_before(value: Any) -> Any:
 
 
 class QueryTaskPayload(BaseModel):
+    domain_info_source: Literal["whois", "apihz"] = "whois"
+    apihz_id: str = Field(default="", max_length=100)
+    apihz_key: str = Field(default="", max_length=500)
     lengths: list[int] = Field(default_factory=list)
     suffixes: list[str] = Field(default_factory=list)
     exclude_chars: list[str] = Field(default_factory=list, max_length=100)
@@ -222,7 +237,9 @@ class QueryTaskPayload(BaseModel):
     proxy_mode: Literal["direct", "tunnel", "api"] = "direct"
     proxy_endpoint: str = Field(default="", max_length=500)
     proxy_max_requests: int = Field(default=50, ge=1, le=10000)
-    proxy_stages: list[Literal["whois", "icp", "blocked", "wechat", "douyin", "qq", "pollution", "blacklist"]] = Field(
+    proxy_stages: list[
+        Literal["rdap", "whois", "icp", "blocked", "wechat", "douyin", "qq", "pollution", "blacklist"]
+    ] = Field(
         default_factory=lambda: ["icp"]
     )
 
@@ -302,6 +319,7 @@ def public_query_task(task: dict[str, Any]) -> dict[str, Any]:
     result = dict(task)
     result["filters"] = __import__("json").loads(result.pop("filters_json") or "{}")
     result["proxy"] = __import__("json").loads(result.pop("proxy_json") or "{}")
+    result["apihz_key_configured"] = apihz_client.has_api_key()
     return result
 
 
@@ -1211,12 +1229,26 @@ def list_query_tasks() -> dict[str, Any]:
 def get_query_settings() -> dict[str, Any]:
     row = db.fetch_one("SELECT settings_json, updated_at FROM query_settings WHERE id = 1")
     if row is None:
-        return ok(None)
+        return ok(
+            {
+                "settings": {
+                    "domain_info_source": "whois",
+                    "apihz_id": "",
+                    "apihz_key": "",
+                    "apihz_key_configured": apihz_client.has_api_key(),
+                },
+                "updated_at": "",
+            }
+        )
     try:
         settings = json.loads(row["settings_json"])
     except json.JSONDecodeError:
         return ok(None)
     settings["domain_composition"] = db.normalize_composition(settings.get("domain_composition"))
+    settings.setdefault("domain_info_source", "whois")
+    settings.setdefault("apihz_id", "")
+    settings["apihz_key"] = ""
+    settings["apihz_key_configured"] = apihz_client.has_api_key()
     return ok({"settings": settings, "updated_at": row["updated_at"]})
 
 
@@ -1224,6 +1256,10 @@ def get_query_settings() -> dict[str, Any]:
 def save_query_settings(payload: QueryTaskPayload) -> dict[str, Any]:
     updated_at = db.utc_now()
     settings = payload.model_dump()
+    if settings.pop("apihz_key", "").strip():
+        apihz_client.save_api_key(payload.apihz_key)
+    settings["apihz_key"] = ""
+    settings["apihz_key_configured"] = apihz_client.has_api_key()
     db.execute(
         """
         INSERT INTO query_settings (id, settings_json, updated_at) VALUES (1, ?, ?)
@@ -1264,10 +1300,19 @@ def preview_query_task(payload: QueryPreviewPayload) -> dict[str, Any]:
 
 @app.post("/api/query-tasks")
 def create_query_task(payload: QueryTaskPayload) -> dict[str, Any]:
+    if payload.apihz_key.strip():
+        apihz_client.save_api_key(payload.apihz_key)
+    if payload.domain_info_source == "apihz":
+        if not payload.apihz_id.strip():
+            raise fail("请选择接口盒子时必须填写接口盒子 ID", 422)
+        if not apihz_client.has_api_key():
+            raise fail("请选择接口盒子时必须配置接口盒子 KEY", 422)
     try:
         task_id = query_manager.start(
             {
                 "name": "域名查询任务",
+                "domain_info_source": payload.domain_info_source,
+                "apihz_id": payload.apihz_id.strip(),
                 "filters": {
                     "lengths": payload.lengths,
                     "suffixes": payload.suffixes,

@@ -4,6 +4,7 @@ import {
   type CreateQueryTaskPayload,
   type DomainSuffix,
   type InterceptCheckItem,
+  type QueryExceptionScheme,
   type QueryLog,
   type QueryTask,
   createQueryTask,
@@ -39,14 +40,40 @@ const previewTotal = ref<number | null>(null);
 const previewLoading = ref(false);
 const lengthInput = ref('');
 const excludeCharsInput = ref('');
-const exceptionLengthInput = ref('');
-const exceptionSuffixInput = ref('');
-const exceptionContainsInput = ref('');
-const exceptionPatternInput = ref('');
 const interceptKeyInput = ref('');
 const interceptKeyConfigured = ref(false);
 const savingInterceptKey = ref(false);
+const apihzKeyInput = ref('');
+const apihzKeyConfigured = ref(false);
+
+type ExceptionSchemeDraft = Omit<QueryExceptionScheme, 'lengths' | 'suffixes' | 'patterns' | 'contains'> & {
+  lengths: string;
+  suffixes: string;
+  patterns: string;
+  contains: string;
+};
+
+function createExceptionScheme(index = 1): QueryExceptionScheme {
+  return { name: `方案 ${index}`, enabled: true, logic: 'or', lengths: [], suffixes: [], patterns: [], contains: [] };
+}
+
+function createExceptionSchemeDraft(scheme: QueryExceptionScheme, index: number): ExceptionSchemeDraft {
+  return {
+    name: scheme.name || `方案 ${index}`,
+    enabled: scheme.enabled,
+    logic: scheme.logic || 'or',
+    lengths: scheme.lengths.join(','),
+    suffixes: scheme.suffixes.join(','),
+    patterns: scheme.patterns.join(','),
+    contains: scheme.contains.join(',')
+  };
+}
+
+const exceptionSchemeDrafts = ref<ExceptionSchemeDraft[]>([createExceptionSchemeDraft(createExceptionScheme(), 1)]);
 const defaultForm: CreateQueryTaskPayload = {
+  domain_info_source: 'whois',
+  apihz_id: '',
+  apihz_key: '',
   lengths: [],
   suffixes: [],
   exclude_chars: [],
@@ -61,7 +88,8 @@ const defaultForm: CreateQueryTaskPayload = {
     lengths: [],
     suffixes: [],
     patterns: [],
-    contains: []
+    contains: [],
+    schemes: [createExceptionScheme()]
   },
   threads: 5,
   whois_retries: 2,
@@ -93,7 +121,14 @@ function freshForm() {
       lengths: [...defaultForm.exceptions.lengths],
       suffixes: [...defaultForm.exceptions.suffixes],
       patterns: [...defaultForm.exceptions.patterns],
-      contains: [...defaultForm.exceptions.contains]
+      contains: [...defaultForm.exceptions.contains],
+      schemes: defaultForm.exceptions.schemes.map(scheme => ({
+        ...scheme,
+        lengths: [...scheme.lengths],
+        suffixes: [...scheme.suffixes],
+        patterns: [...scheme.patterns],
+        contains: [...scheme.contains]
+      }))
     }
   };
 }
@@ -139,7 +174,7 @@ const interceptOptions: { value: InterceptCheckItem; label: string }[] = [
   { value: 'blocked', label: '拦截' },
   { value: 'blacklist', label: '黑名单' }
 ];
-const proxyStageOptions = [{ value: 'whois', label: 'WHOIS' }, { value: 'icp', label: '备案' }, ...interceptOptions];
+const proxyStageOptions = [{ value: 'rdap', label: 'RDAP' }, { value: 'icp', label: '备案' }, ...interceptOptions];
 const retryItems = [
   { key: 'whois_retries', label: 'whoisRetries', short: 'WHOIS' },
   { key: 'icp_retries', label: 'icpRetries', short: '备案' },
@@ -235,14 +270,35 @@ function parseTokens(value: string) {
   ];
 }
 
-function syncExceptionLengths() {
-  form.exceptions.lengths = parseLengths(exceptionLengthInput.value);
+function syncExceptionSchemes() {
+  form.exceptions.schemes = exceptionSchemeDrafts.value.map((draft, index) => ({
+    name: draft.name.trim() || `方案 ${index + 1}`,
+    enabled: draft.enabled,
+    logic: draft.logic,
+    lengths: parseLengths(draft.lengths),
+    suffixes: parseTokens(draft.suffixes),
+    patterns: parseTokens(draft.patterns).map(value => value.toUpperCase()),
+    contains: parseTokens(draft.contains)
+  }));
+  form.exceptions.enabled = form.exceptions.schemes.some(scheme => scheme.enabled);
+  form.exceptions.lengths = [];
+  form.exceptions.suffixes = [];
+  form.exceptions.patterns = [];
+  form.exceptions.contains = [];
 }
 
-function syncExceptionTokens() {
-  form.exceptions.suffixes = parseTokens(exceptionSuffixInput.value);
-  form.exceptions.contains = parseTokens(exceptionContainsInput.value);
-  form.exceptions.patterns = parseTokens(exceptionPatternInput.value).map(value => value.toUpperCase());
+function addExceptionScheme() {
+  exceptionSchemeDrafts.value.push(
+    createExceptionSchemeDraft(
+      createExceptionScheme(exceptionSchemeDrafts.value.length + 1),
+      exceptionSchemeDrafts.value.length + 1
+    )
+  );
+}
+
+function removeExceptionScheme(index: number) {
+  if (exceptionSchemeDrafts.value.length <= 1) return;
+  exceptionSchemeDrafts.value.splice(index, 1);
 }
 
 function retryLabel(key: string) {
@@ -251,12 +307,10 @@ function retryLabel(key: string) {
 
 function restoreDefaults() {
   Object.assign(form, freshForm());
+  exceptionSchemeDrafts.value = [createExceptionSchemeDraft(createExceptionScheme(), 1)];
   lengthInput.value = '';
   excludeCharsInput.value = '';
-  exceptionLengthInput.value = '';
-  exceptionSuffixInput.value = '';
-  exceptionContainsInput.value = '';
-  exceptionPatternInput.value = '';
+  apihzKeyInput.value = '';
   registrationRange.value = [];
   expirationRange.value = [];
   previewTotal.value = null;
@@ -274,27 +328,50 @@ async function loadSavedSettings() {
 
 function applySavedSettings(settings: CreateQueryTaskPayload) {
   Object.assign(form, freshForm(), settings);
+  form.apihz_key = '';
+  apihzKeyInput.value = '';
+  apihzKeyConfigured.value = Boolean(settings.apihz_key_configured);
   form.domain_composition = [...(settings.domain_composition || [])];
   form.intercept_checks = [...(settings.intercept_checks || [])];
   // 旧配置中的抖音代理环节已不再使用
-  form.proxy_stages = (settings.proxy_stages || []).filter(stage =>
-    proxyStageOptions.some(item => item.value === stage)
-  );
+  form.proxy_stages = (settings.proxy_stages || [])
+    .map(stage => (stage === 'whois' ? 'rdap' : stage))
+    .filter(stage => proxyStageOptions.some(item => item.value === stage));
   const exceptions = settings.exceptions || defaultForm.exceptions;
+  const savedSchemes =
+    exceptions.schemes?.length > 0
+      ? exceptions.schemes
+      : [
+          {
+            ...createExceptionScheme(),
+            enabled: Boolean(exceptions.enabled),
+            lengths: exceptions.lengths || [],
+            suffixes: exceptions.suffixes || [],
+            patterns: exceptions.patterns || [],
+            contains: exceptions.contains || []
+          }
+        ];
   form.exceptions = {
     ...defaultForm.exceptions,
     ...exceptions,
-    lengths: [...exceptions.lengths],
-    suffixes: [...exceptions.suffixes],
-    patterns: [...exceptions.patterns],
-    contains: [...exceptions.contains]
+    lengths: [...(exceptions.lengths || [])],
+    suffixes: [...(exceptions.suffixes || [])],
+    patterns: [...(exceptions.patterns || [])],
+    contains: [...(exceptions.contains || [])],
+    schemes: savedSchemes.map(scheme => ({
+      ...createExceptionScheme(),
+      ...scheme,
+      lengths: [...(scheme.lengths || [])],
+      suffixes: [...(scheme.suffixes || [])],
+      patterns: [...(scheme.patterns || [])],
+      contains: [...(scheme.contains || [])]
+    }))
   };
+  exceptionSchemeDrafts.value = form.exceptions.schemes.map((scheme, index) =>
+    createExceptionSchemeDraft(scheme, index + 1)
+  );
   lengthInput.value = form.lengths.join(',');
   excludeCharsInput.value = form.exclude_chars.join(',');
-  exceptionLengthInput.value = form.exceptions.lengths.join(',');
-  exceptionSuffixInput.value = form.exceptions.suffixes.join(',');
-  exceptionContainsInput.value = form.exceptions.contains.join(',');
-  exceptionPatternInput.value = form.exceptions.patterns.join(',');
   registrationRange.value =
     form.registration_start && form.registration_end ? [form.registration_start, form.registration_end] : [];
   expirationRange.value =
@@ -304,13 +381,16 @@ function applySavedSettings(settings: CreateQueryTaskPayload) {
 async function saveSettings() {
   syncLengths();
   syncExcludeChars();
-  syncExceptionLengths();
-  syncExceptionTokens();
+  syncExceptionSchemes();
   syncRegistrationRange();
   syncExpirationRange();
+  form.apihz_key = apihzKeyInput.value.trim();
   savingSettings.value = true;
   try {
-    await saveQuerySettings({ ...form });
+    const result = await saveQuerySettings({ ...form });
+    form.apihz_key = '';
+    apihzKeyInput.value = '';
+    apihzKeyConfigured.value = Boolean(result.settings.apihz_key_configured || apihzKeyConfigured.value);
     window.$message?.success('查询配置已保存');
   } catch (error) {
     window.$message?.error(error instanceof Error ? error.message : '保存查询配置失败');
@@ -403,10 +483,10 @@ async function handleStart() {
   }
   syncLengths();
   syncExcludeChars();
-  syncExceptionLengths();
-  syncExceptionTokens();
+  syncExceptionSchemes();
   syncRegistrationRange();
   syncExpirationRange();
+  form.apihz_key = apihzKeyInput.value.trim();
   if (form.intercept_checks.length && !interceptKeyConfigured.value) {
     window.$message?.warning('已勾选拦截检测，请先保存拦截检测 API Key');
     return;
@@ -414,6 +494,11 @@ async function handleStart() {
   submitting.value = true;
   try {
     await createQueryTask({ ...form });
+    if (form.apihz_key) {
+      form.apihz_key = '';
+      apihzKeyInput.value = '';
+      apihzKeyConfigured.value = true;
+    }
     window.$message?.success('查询任务已启动');
     await loadData();
   } catch (error) {
@@ -647,6 +732,48 @@ onBeforeUnmount(() => {
               </template>
 
               <ElForm :model="form" label-width="128px">
+                <ElDivider content-position="left">域名信息</ElDivider>
+                <ElRow :gutter="24">
+                  <ElCol :lg="8" :md="12" :sm="24">
+                    <ElFormItem label="查询来源">
+                      <ElSelect v-model="form.domain_info_source" class="w-full">
+                        <ElOption label="WHOIS（RDAP 优先）" value="whois" />
+                        <ElOption label="接口盒子" value="apihz" />
+                      </ElSelect>
+                    </ElFormItem>
+                  </ElCol>
+                  <template v-if="form.domain_info_source === 'apihz'">
+                    <ElCol :lg="6" :md="12" :sm="24">
+                      <ElFormItem label="接口盒子 ID">
+                        <ElInput v-model="form.apihz_id" clearable placeholder="接口盒子用户 ID" />
+                      </ElFormItem>
+                    </ElCol>
+                    <ElCol :lg="10" :md="24" :sm="24">
+                      <ElFormItem label="接口盒子 KEY">
+                        <div class="w-full flex flex-wrap items-center gap-8px">
+                          <ElInput
+                            v-model="apihzKeyInput"
+                            class="min-w-220px flex-1"
+                            type="password"
+                            show-password
+                            clearable
+                            autocomplete="new-password"
+                            :placeholder="apihzKeyConfigured ? '已配置，输入新 KEY 可替换' : '接口盒子通信 KEY'"
+                          />
+                          <ElTag :type="apihzKeyConfigured ? 'success' : 'warning'" size="small">
+                            {{ apihzKeyConfigured ? '已配置' : '未配置' }}
+                          </ElTag>
+                        </div>
+                      </ElFormItem>
+                    </ElCol>
+                  </template>
+                </ElRow>
+                <div
+                  v-if="form.domain_info_source === 'apihz'"
+                  class="mb-12px rounded-6px bg-gray-50 px-12px py-10px text-13px text-gray-600 dark:bg-gray-800/60 dark:text-gray-300"
+                >
+                  接口盒子凭据会加密保存；选择 WHOIS 时使用 RDAP 优先、Py-WHOIS 直连的现有流程。
+                </div>
                 <ElDivider content-position="left">{{ $t('page.runtime.queryTasks.scopeTitle') }}</ElDivider>
                 <ElRow :gutter="24">
                   <ElCol :lg="6" :md="12" :sm="24">
@@ -847,66 +974,59 @@ onBeforeUnmount(() => {
                 <div
                   class="mb-12px rounded-6px bg-gray-50 px-12px py-10px text-13px text-gray-600 dark:bg-gray-800/60 dark:text-gray-300"
                 >
-                  WHOIS 条件必须先通过；以下条件命中任意一项，即使未备案或已拦截也会进入符合域名列表（优先级最高）。
+                  WHOIS
+                  条件必须先通过；启用的任一方案命中后，即使未备案或已拦截也会进入符合域名列表。方案内可选择“或”或“且”逻辑。
                 </div>
-                <ElRow :gutter="24">
-                  <ElCol :lg="5" :md="8" :sm="24">
-                    <ElFormItem label="启用例外策略">
-                      <ElSwitch v-model="form.exceptions.enabled" />
-                    </ElFormItem>
-                  </ElCol>
-                  <ElCol :lg="6" :md="8" :sm="24">
-                    <ElFormItem label="例外长度">
-                      <ElInput
-                        v-model="exceptionLengthInput"
-                        class="w-full"
-                        placeholder="如 1-4、8"
-                        clearable
-                        @change="syncExceptionLengths"
-                        @blur="syncExceptionLengths"
-                      />
-                    </ElFormItem>
-                  </ElCol>
-                  <ElCol :lg="6" :md="8" :sm="24">
-                    <ElFormItem label="例外后缀">
-                      <ElInput
-                        v-model="exceptionSuffixInput"
-                        class="w-full"
-                        placeholder="如 cn,com"
-                        clearable
-                        @change="syncExceptionTokens"
-                        @blur="syncExceptionTokens"
-                      />
-                    </ElFormItem>
-                  </ElCol>
-                  <ElCol :lg="7" :md="8" :sm="24">
-                    <ElFormItem label="包含字符">
-                      <ElInput
-                        v-model="exceptionContainsInput"
-                        class="w-full"
-                        placeholder="如 ai,88（命中任一项）"
-                        clearable
-                        @change="syncExceptionTokens"
-                        @blur="syncExceptionTokens"
-                      />
-                    </ElFormItem>
-                  </ElCol>
-                  <ElCol :lg="24" :md="24" :sm="24">
-                    <ElFormItem label="重复模式">
-                      <ElInput
-                        v-model="exceptionPatternInput"
-                        class="w-full"
-                        placeholder="如 ABAB,AAABBB,ABCABC,ABCDABCD"
-                        clearable
-                        @change="syncExceptionTokens"
-                        @blur="syncExceptionTokens"
-                      />
-                      <div class="mt-4px text-12px text-gray-400">
-                        仅支持大写字母；同一字母代表相同字符，不同字母代表不同字符，且长度必须一致。
-                      </div>
-                    </ElFormItem>
-                  </ElCol>
-                </ElRow>
+                <div
+                  v-for="(scheme, index) in exceptionSchemeDrafts"
+                  :key="index"
+                  class="mb-12px border border-gray-200 rounded-6px p-12px dark:border-gray-700"
+                >
+                  <div class="mb-8px flex flex-wrap items-center gap-8px">
+                    <ElInput v-model="scheme.name" class="w-180px" placeholder="方案名称" />
+                    <ElSwitch v-model="scheme.enabled" active-text="启用" inactive-text="关闭" />
+                    <ElRadioGroup v-model="scheme.logic" size="small">
+                      <ElRadioButton label="or">或</ElRadioButton>
+                      <ElRadioButton label="and">且</ElRadioButton>
+                    </ElRadioGroup>
+                    <ElButton
+                      v-if="exceptionSchemeDrafts.length > 1"
+                      text
+                      type="danger"
+                      @click="removeExceptionScheme(index)"
+                    >
+                      删除方案
+                    </ElButton>
+                  </div>
+                  <ElRow :gutter="16">
+                    <ElCol :lg="6" :md="12" :sm="24">
+                      <ElFormItem label="长度">
+                        <ElInput v-model="scheme.lengths" class="w-full" placeholder="如 1-4、8" clearable />
+                      </ElFormItem>
+                    </ElCol>
+                    <ElCol :lg="6" :md="12" :sm="24">
+                      <ElFormItem label="后缀">
+                        <ElInput v-model="scheme.suffixes" class="w-full" placeholder="如 cn,com" clearable />
+                      </ElFormItem>
+                    </ElCol>
+                    <ElCol :lg="6" :md="12" :sm="24">
+                      <ElFormItem label="包含字符">
+                        <ElInput v-model="scheme.contains" class="w-full" placeholder="如 ai,88" clearable />
+                      </ElFormItem>
+                    </ElCol>
+                    <ElCol :lg="6" :md="12" :sm="24">
+                      <ElFormItem label="重复模式">
+                        <ElInput v-model="scheme.patterns" class="w-full" placeholder="如 ABAB,ABCABC" clearable />
+                      </ElFormItem>
+                    </ElCol>
+                  </ElRow>
+                  <div class="text-12px text-gray-400">
+                    方案内的多个条件按“{{
+                      scheme.logic === 'and' ? '且' : '或'
+                    }}”判断；多个方案之间按“或”判断。重复模式仅支持大写字母。
+                  </div>
+                </div>
+                <ElButton type="primary" plain @click="addExceptionScheme">新增例外方案</ElButton>
 
                 <ElDivider content-position="left">{{ $t('page.runtime.queryTasks.strategyTitle') }}</ElDivider>
                 <ElFormItem label="重试次数">

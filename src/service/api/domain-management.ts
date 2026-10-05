@@ -99,6 +99,9 @@ export type DomainCharClass = 'letter' | 'digit' | 'chinese' | 'symbol';
 export interface QueryTask {
   id: number;
   name: string;
+  domain_info_source: 'whois' | 'apihz';
+  apihz_id: string;
+  apihz_key_configured?: boolean;
   filters: {
     lengths: number[];
     suffixes: string[];
@@ -143,12 +146,26 @@ export interface QueryTask {
 /** 拦截检测项：微信、QQ、污染、拦截（被墙）、黑名单 */
 export type InterceptCheckItem = 'wechat' | 'qq' | 'pollution' | 'blocked' | 'blacklist';
 
-export interface QueryExceptionSettings {
+export type QueryExceptionLogic = 'and' | 'or';
+
+export interface QueryExceptionScheme {
+  name: string;
   enabled: boolean;
+  logic: QueryExceptionLogic;
   lengths: number[];
   suffixes: string[];
   patterns: string[];
   contains: string[];
+}
+
+export interface QueryExceptionSettings {
+  /** Legacy single-scheme fields kept for old saved settings. */
+  enabled?: boolean;
+  lengths: number[];
+  suffixes: string[];
+  patterns: string[];
+  contains: string[];
+  schemes: QueryExceptionScheme[];
 }
 
 export interface QueryResult {
@@ -276,6 +293,10 @@ export function previewQueryTask(payload: {
 }
 
 export interface CreateQueryTaskPayload {
+  domain_info_source: 'whois' | 'apihz';
+  apihz_id: string;
+  apihz_key: string;
+  apihz_key_configured?: boolean;
   lengths: number[];
   suffixes: string[];
   exclude_chars: string[];
