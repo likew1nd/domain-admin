@@ -768,6 +768,15 @@ class QueryTaskManager:
 
     @staticmethod
     def _match_exception_scheme(label: str, suffix: str, scheme: dict[str, Any]) -> tuple[bool, str]:
+        excluded = {
+            char
+            for value in scheme.get("exclude_chars", [])
+            for char in str(value).strip().lower()
+            if char
+        }
+        hit = next((char for char in excluded if char in label), "")
+        if hit:
+            return False, f"排除字符 {hit}"
         checks: list[tuple[bool, str]] = []
         lengths = {int(value) for value in scheme.get("lengths", []) if str(value).isdigit()}
         if lengths:

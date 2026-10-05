@@ -46,15 +46,28 @@ const savingInterceptKey = ref(false);
 const apihzKeyInput = ref('');
 const apihzKeyConfigured = ref(false);
 
-type ExceptionSchemeDraft = Omit<QueryExceptionScheme, 'lengths' | 'suffixes' | 'patterns' | 'contains'> & {
+type ExceptionSchemeDraft = Omit<
+  QueryExceptionScheme,
+  'lengths' | 'suffixes' | 'patterns' | 'contains' | 'exclude_chars'
+> & {
   lengths: string;
   suffixes: string;
   patterns: string;
   contains: string;
+  exclude_chars: string;
 };
 
 function createExceptionScheme(index = 1): QueryExceptionScheme {
-  return { name: `方案 ${index}`, enabled: true, logic: 'or', lengths: [], suffixes: [], patterns: [], contains: [] };
+  return {
+    name: `方案 ${index}`,
+    enabled: true,
+    logic: 'or',
+    lengths: [],
+    suffixes: [],
+    patterns: [],
+    contains: [],
+    exclude_chars: []
+  };
 }
 
 function createExceptionSchemeDraft(scheme: QueryExceptionScheme, index: number): ExceptionSchemeDraft {
@@ -65,7 +78,8 @@ function createExceptionSchemeDraft(scheme: QueryExceptionScheme, index: number)
     lengths: scheme.lengths.join(','),
     suffixes: scheme.suffixes.join(','),
     patterns: scheme.patterns.join(','),
-    contains: scheme.contains.join(',')
+    contains: scheme.contains.join(','),
+    exclude_chars: scheme.exclude_chars.join(',')
   };
 }
 
@@ -127,7 +141,8 @@ function freshForm() {
         lengths: [...scheme.lengths],
         suffixes: [...scheme.suffixes],
         patterns: [...scheme.patterns],
-        contains: [...scheme.contains]
+        contains: [...scheme.contains],
+        exclude_chars: [...scheme.exclude_chars]
       }))
     }
   };
@@ -278,7 +293,8 @@ function syncExceptionSchemes() {
     lengths: parseLengths(draft.lengths),
     suffixes: parseTokens(draft.suffixes),
     patterns: parseTokens(draft.patterns).map(value => value.toUpperCase()),
-    contains: parseTokens(draft.contains)
+    contains: parseTokens(draft.contains),
+    exclude_chars: [...new Set(draft.exclude_chars.toLowerCase().replace(/[，,、\s]+/g, ''))]
   }));
   form.exceptions.enabled = form.exceptions.schemes.some(scheme => scheme.enabled);
   form.exceptions.lengths = [];
@@ -364,7 +380,8 @@ function applySavedSettings(settings: CreateQueryTaskPayload) {
       lengths: [...(scheme.lengths || [])],
       suffixes: [...(scheme.suffixes || [])],
       patterns: [...(scheme.patterns || [])],
-      contains: [...(scheme.contains || [])]
+      contains: [...(scheme.contains || [])],
+      exclude_chars: [...(scheme.exclude_chars || [])]
     }))
   };
   exceptionSchemeDrafts.value = form.exceptions.schemes.map((scheme, index) =>
@@ -1019,11 +1036,16 @@ onBeforeUnmount(() => {
                         <ElInput v-model="scheme.patterns" class="w-full" placeholder="如 ABAB,ABCABC" clearable />
                       </ElFormItem>
                     </ElCol>
+                    <ElCol :lg="6" :md="12" :sm="24">
+                      <ElFormItem label="排除字符">
+                        <ElInput v-model="scheme.exclude_chars" class="w-full" placeholder="如 0,4,8" clearable />
+                      </ElFormItem>
+                    </ElCol>
                   </ElRow>
                   <div class="text-12px text-gray-400">
                     方案内的多个条件按“{{
                       scheme.logic === 'and' ? '且' : '或'
-                    }}”判断；多个方案之间按“或”判断。重复模式仅支持大写字母。
+                    }}”判断；排除字符命中时方案直接不匹配；多个方案之间按“或”判断。重复模式仅支持大写字母。
                   </div>
                 </div>
                 <ElButton type="primary" plain @click="addExceptionScheme">新增例外方案</ElButton>

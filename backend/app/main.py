@@ -192,6 +192,7 @@ class QueryExceptionSchemePayload(BaseModel):
     suffixes: list[str] = Field(default_factory=list, max_length=100)
     patterns: list[str] = Field(default_factory=list, max_length=20)
     contains: list[str] = Field(default_factory=list, max_length=50)
+    exclude_chars: list[str] = Field(default_factory=list, max_length=100)
 
 
 class QueryExceptionPayload(BaseModel):

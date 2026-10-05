@@ -156,6 +156,7 @@ export interface QueryExceptionScheme {
   suffixes: string[];
   patterns: string[];
   contains: string[];
+  exclude_chars: string[];
 }
 
 export interface QueryExceptionSettings {

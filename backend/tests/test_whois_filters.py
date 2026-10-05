@@ -93,6 +93,7 @@ class WhoisFilterTests(unittest.TestCase):
                         "logic": "and",
                         "lengths": [4],
                         "suffixes": ["cn"],
+                        "exclude_chars": ["0", "x"],
                     },
                     {
                         "name": "关闭方案",
@@ -105,6 +106,7 @@ class WhoisFilterTests(unittest.TestCase):
         }
         self.assertEqual(QueryTaskManager._match_exception("abcd.cn", filters), (True, "四位 CN：长度 4、后缀 .cn"))
         self.assertEqual(QueryTaskManager._match_exception("abcd.com", filters), (False, ""))
+        self.assertEqual(QueryTaskManager._match_exception("abc0.cn", filters), (False, ""))
 
         filters["exceptions"]["schemes"][0]["logic"] = "or"
         self.assertEqual(QueryTaskManager._match_exception("abcd.com", filters)[0], True)
