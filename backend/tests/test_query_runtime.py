@@ -17,9 +17,9 @@ from app.whois_client import RdapError
 
 
 class QueryRuntimeTests(unittest.TestCase):
-    def test_no_bind_ip_is_not_retried(self):
-        self.assertTrue(_is_terminal_icp_error(RuntimeError("702, message='No BindIP'")))
-        self.assertTrue(_is_terminal_icp_error(RuntimeError("proxy NoBindIP")))
+    def test_no_bind_ip_is_retried(self):
+        self.assertFalse(_is_terminal_icp_error(RuntimeError("702, message='No BindIP'")))
+        self.assertFalse(_is_terminal_icp_error(RuntimeError("proxy NoBindIP")))
         self.assertFalse(_is_terminal_icp_error(RuntimeError("连接超时")))
 
     def test_start_rejects_a_second_created_task(self):

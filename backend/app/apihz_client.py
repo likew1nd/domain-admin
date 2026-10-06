@@ -15,7 +15,11 @@ from . import db
 from .crypto import decrypt_cookie, encrypt_cookie
 
 
-API_URL = "https://cn.apihz.cn/api/wangzhan/whoisall.php"
+VIP_BASE_URL = "https://vip.apihz.cn/api/wangzhan"
+RDAP_API_URL = f"{VIP_BASE_URL}/whoisrdap.php"
+WHOIS_API_URL = f"{VIP_BASE_URL}/whoisall.php"
+# 保留旧名称供已有调用方兼容；实际查询统一走 VIP 线路。
+API_URL = WHOIS_API_URL
 SECRET_NAME = "apihz_api_key"
 TIMEOUT_SECONDS = 15
 
@@ -47,25 +51,47 @@ def save_api_key(value: str) -> None:
     )
 
 
-def _request(domain: str, api_id: str, api_key: str) -> tuple[dict[str, Any], str]:
+def _interface_name(endpoint: str) -> str:
+    return "RDAP" if endpoint == RDAP_API_URL else "WHOIS"
+
+
+def _interface_error(interface: str, message: str) -> ApiHzError:
+    return ApiHzError(f"接口盒子（{interface}）{message}")
+
+
+def _request(
+    domain: str,
+    api_id: str,
+    api_key: str,
+    endpoint: str = API_URL,
+) -> tuple[dict[str, Any], str]:
+    interface = _interface_name(endpoint)
     query = urlencode({"id": api_id, "key": api_key, "domain": domain, "type": "2"})
     request = Request(
-        f"{API_URL}?{query}",
-        headers={"Accept": "application/json", "User-Agent": "domain-query/1.0"},
+        f"{endpoint}?{query}",
+        headers={
+            "Accept": "application/rdap+json, application/json",
+            "User-Agent": "domain-query/1.0",
+        },
     )
     try:
         with build_opener().open(request, timeout=TIMEOUT_SECONDS) as response:
             raw = response.read().decode("utf-8", errors="replace")
     except HTTPError as exc:
-        raise ApiHzError(f"接口盒子 HTTP {exc.code}") from exc
+        raise _interface_error(interface, f"HTTP {exc.code}") from exc
     except (OSError, URLError, TimeoutError, ValueError) as exc:
-        raise ApiHzError(f"接口盒子请求失败：{exc}") from exc
+        raise _interface_error(interface, f"请求失败：{exc}") from exc
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ApiHzError("接口盒子返回格式无效") from exc
+        raise _interface_error(interface, "返回格式无效") from exc
+    if isinstance(payload, (int, float)) and int(payload) == payload:
+        return {"code": int(payload), "msg": f"接口盒子返回错误码 {int(payload)}"}, raw
+    if isinstance(payload, str) and payload.strip().isdigit():
+        code = int(payload.strip())
+        return {"code": code, "msg": f"接口盒子返回错误码 {code}"}, raw
     if not isinstance(payload, dict):
-        raise ApiHzError("接口盒子返回格式无效")
+        raise _interface_error(interface, "返回格式无效")
     return payload, raw
 
 
@@ -105,24 +131,46 @@ def _normalise_whois(value: Any) -> str:
     return re.sub(r"<[^>]+>", "", text).replace("\r", "")
 
 
-def lookup(domain: str, api_id: str, api_key: str | None = None) -> dict[str, Any]:
-    api_id = str(api_id or "").strip()
-    api_key = str(api_key if api_key is not None else get_api_key()).strip()
-    if not api_id or not api_key:
-        raise ApiHzError("接口盒子未配置 ID 或 KEY")
-
-    normalized = str(domain).strip().lower().rstrip(".")
-    payload, raw_response = _request(normalized, api_id, api_key)
+def _api_code(payload: dict[str, Any]) -> int | None:
+    value = payload.get("code")
+    if value is None:
+        return None
     try:
-        code = int(payload.get("code", 0))
+        return int(value)
     except (TypeError, ValueError):
-        code = 0
+        return 0
+
+
+def _available_result(domain: str, raw: str) -> dict[str, Any]:
+    return {
+        "domain": domain,
+        "expiration_date": "",
+        "creation_date": "",
+        "status": "",
+        "statuses": [],
+        "registrar": "",
+        "name_servers": [],
+        "raw": raw,
+        "available": True,
+        "source": "apihz",
+    }
+
+
+def _parse_whois(
+    domain: str,
+    payload: dict[str, Any],
+    raw_response: str,
+    interface: str = "WHOIS",
+) -> dict[str, Any]:
+    code = _api_code(payload)
     if code != 200:
-        raise ApiHzError(str(payload.get("msg") or f"接口盒子返回错误码 {code}"))
+        if code == 404:
+            return _available_result(domain, str(payload.get("msg") or raw_response))
+        raise _interface_error(interface, str(payload.get("msg") or f"返回错误码 {code or 0}"))
 
     raw = _normalise_whois(payload.get("whois") or payload.get("data"))
     if not raw.strip():
-        raise ApiHzError("接口盒子未返回 WHOIS 信息")
+        raise _interface_error(interface, "未返回 WHOIS 信息")
     expiration = _field_date(
         raw,
         (
@@ -144,6 +192,7 @@ def lookup(domain: str, api_id: str, api_key: str | None = None) -> dict[str, An
         for marker in (
             "no match for",
             "no matching record",
+            "no data found",
             "not found",
             "not registered",
             "domain available",
@@ -152,9 +201,9 @@ def lookup(domain: str, api_id: str, api_key: str | None = None) -> dict[str, An
         )
     )
     if not expiration and not statuses and not available:
-        raise ApiHzError("接口盒子返回信息不足，无法确定域名状态")
+        raise _interface_error(interface, "返回信息不足，无法确定域名状态")
     return {
-        "domain": normalized,
+        "domain": domain,
         "expiration_date": expiration.isoformat() if expiration else "",
         "creation_date": creation.isoformat() if creation else "",
         "status": " | ".join(statuses),
@@ -165,3 +214,60 @@ def lookup(domain: str, api_id: str, api_key: str | None = None) -> dict[str, An
         "available": available,
         "source": "apihz",
     }
+
+
+def _parse_rdap(domain: str, payload: dict[str, Any], raw_response: str) -> dict[str, Any]:
+    code = _api_code(payload)
+    # 成功的 RDAP 响应会在对象字段之外附加 code=200/cachetime，不能按错误包装处理。
+    if payload.get("objectClassName") == "domain":
+        code = None
+    if code is not None:
+        if code == 404:
+            return _available_result(domain, str(payload.get("msg") or raw_response))
+        raise _interface_error("RDAP", str(payload.get("msg") or f"返回错误码 {code or 0}"))
+    if payload.get("objectClassName") != "domain":
+        raise _interface_error("RDAP", "返回信息不足，无法确定域名状态")
+
+    dates: dict[str, date] = {}
+    for event in payload.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        event_date = _date_value(str(event.get("eventDate") or ""))
+        action = str(event.get("eventAction") or "").strip().lower()
+        if event_date and action:
+            dates[action] = event_date
+    statuses = [str(item).strip() for item in payload.get("status") or [] if str(item).strip()]
+    expiration = dates.get("expiration") or dates.get("expiry")
+    creation = dates.get("registration") or dates.get("creation")
+    if not expiration and not statuses:
+        raise _interface_error("RDAP", "返回信息不足，无法确定域名状态")
+    return {
+        "domain": str(payload.get("ldhName") or domain),
+        "expiration_date": expiration.isoformat() if expiration else "",
+        "creation_date": creation.isoformat() if creation else "",
+        "status": " | ".join(statuses),
+        "statuses": statuses,
+        "registrar": "",
+        "name_servers": [],
+        "raw": raw_response,
+        "available": False,
+        "source": "apihz",
+    }
+
+
+def lookup(domain: str, api_id: str, api_key: str | None = None) -> dict[str, Any]:
+    api_id = str(api_id or "").strip()
+    api_key = str(api_key if api_key is not None else get_api_key()).strip()
+    if not api_id or not api_key:
+        raise ApiHzError("接口盒子未配置 ID 或 KEY")
+
+    normalized = str(domain).strip().lower().rstrip(".")
+    # 始终使用 VIP 线路和 type=2；RDAP 返回 400/403 时回退 WHOIS。
+    payload, raw_response = _request(normalized, api_id, api_key, RDAP_API_URL)
+    if _api_code(payload) in {400, 403}:
+        payload, raw_response = _request(normalized, api_id, api_key, WHOIS_API_URL)
+        return _parse_whois(normalized, payload, raw_response, "WHOIS")
+    # 兼容旧测试/旧服务直接返回 WHOIS 包装对象的情况。
+    if "whois" in payload or "data" in payload:
+        return _parse_whois(normalized, payload, raw_response, "RDAP")
+    return _parse_rdap(normalized, payload, raw_response)

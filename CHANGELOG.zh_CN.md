@@ -1,5 +1,19 @@
 # 更新日志
 
+## [v1.0.9](https://github.com/likew1nd/domain-admin/compare/v1.0.8...v1.0.9) (2026-10-06)
+
+### 🛠 优化
+
+- APIHZ 域名查询统一使用 VIP 线路和实时 `type=2` 查询，不使用缓存。
+- RDAP 返回 `400` 或 `403` 时自动回退到 VIP WHOIS 接口，并继续按任务配置重试不确定结果。
+- 错误日志明确区分 RDAP 接口和 WHOIS 接口的返回结果。
+- `702 / No BindIP` 备案查询错误改为释放当前代理并继续重试，不再第 1 次直接停止。
+
+### 🐞 修复
+
+- 修复 APIHZ 返回纯文本错误码时被误判为返回格式无效的问题。
+- 补充 APIHZ 回退、RDAP 解析和备案重试回归测试。
+
 ## [v1.0.8](https://github.com/likew1nd/domain-admin/compare/v1.0.7...v1.0.8) (2026-10-05)
 
 ### 🚀 新功能

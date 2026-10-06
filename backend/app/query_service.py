@@ -29,9 +29,14 @@ def _domain_info_stage(source: str) -> str:
 
 
 def _is_terminal_icp_error(error: BaseException) -> bool:
-    """Return whether an ICP error cannot be fixed by retrying the same request."""
-    text = str(error or "").lower().replace(" ", "")
-    return "nobindip" in text or ("702" in text and "bindip" in text)
+    """Return whether an ICP error cannot be fixed by retrying the request.
+
+    A proxy ``702/NoBindIP`` response is transient: the next attempt obtains a
+    new proxy address, so it must respect the configured ICP retry count.
+    Authentication and quota failures are raised as ``BoceFatalError`` before
+    reaching this helper and are handled separately.
+    """
+    return False
 
 
 def now() -> str:
