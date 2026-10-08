@@ -174,6 +174,14 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
           <ElTableColumn prop="query_time" :label="$t('page.domain.queryResults.queryTime')" width="170">
             <template #default="{ row }">{{ formatDateTime(row.checked_at || row.query_time) }}</template>
           </ElTableColumn>
+          <ElTableColumn
+            v-if="result === 'qualified'"
+            prop="last_checked_at"
+            :label="$t('page.domain.queryResults.lastMonitorTime')"
+            width="170"
+          >
+            <template #default="{ row }">{{ formatDateTime(row.last_checked_at) || '—' }}</template>
+          </ElTableColumn>
         </ElTable>
       </div>
       <div class="pagination-bar">

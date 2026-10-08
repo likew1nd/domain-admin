@@ -5,10 +5,14 @@ import hashlib
 import hmac
 import http.client
 import json
+import math
 import re
+import threading
+import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
@@ -444,6 +448,29 @@ class AliyunIntlRegistrar(RegistrarAdapter):
         return 200 <= status_code < 300 and "InvalidAccessKeyId" not in response, status_code, response
 
 
+@dataclass
+class _DynadotRequestState:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    next_request_at: float = 0.0
+    limited_until: float = 0.0
+    retry_delay: float = 5.0
+
+
+_dynadot_states: dict[tuple[str, str], _DynadotRequestState] = {}
+_dynadot_states_lock = threading.Lock()
+
+
+def _retry_after_seconds(value: str | None) -> float:
+    value = (value or "").strip()
+    if value.isascii() and value.isdigit():
+        return float(value)
+    try:
+        retry_at = parsedate_to_datetime(value)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+    except (ValueError, TypeError, OverflowError):
+        return 0.0
+
+
 def _send_dynadot(request: Request) -> tuple[int, str]:
     # urllib normalizes ``X-Request-ID`` to ``X-request-id``. Dynadot's
     # gateway treats that header name as case-sensitive, so use http.client
@@ -451,25 +478,48 @@ def _send_dynadot(request: Request) -> tuple[int, str]:
     parsed = urlsplit(request.full_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise RegistrarError("注册商 API 地址必须以 http:// 或 https:// 开头")
-    connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-    path = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
-    connection = connection_type(parsed.hostname, parsed.port, timeout=20)
-    try:
-        headers = {}
-        for key, value in request.header_items():
-            normalized = str(key).lower()
-            if normalized == "x-request-id":
-                key = "X-Request-ID"
-            elif normalized == "x-signature":
-                key = "X-Signature"
-            headers[key] = value
-        connection.request(request.get_method(), path, body=request.data, headers=headers)
-        response = connection.getresponse()
-        return int(response.status), response.read().decode("utf-8", errors="replace")[:4000]
-    except (OSError, http.client.HTTPException) as exc:
-        raise RegistrarError(f"注册商 API 网络错误: {exc}") from exc
-    finally:
-        connection.close()
+    # Each domain creates a new adapter, so queries, account tests and registrations
+    # must share pacing by endpoint + API key. ponytail: process-local; coordinate
+    # externally if the backend is ever deployed with multiple worker processes.
+    account = (f"{parsed.scheme}://{parsed.netloc.lower()}", request.get_header("Authorization", ""))
+    with _dynadot_states_lock:
+        state = _dynadot_states.setdefault(account, _DynadotRequestState())
+    with state.lock:
+        remaining = state.limited_until - time.monotonic()
+        if remaining > 0:
+            raise RegistrarError(f"Dynadot 请求限流（HTTP 429），冷却中，约 {math.ceil(remaining)} 秒后可重试")
+        wait = state.next_request_at - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+        path = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+        connection = connection_type(parsed.hostname, parsed.port, timeout=20)
+        try:
+            headers = {}
+            for key, value in request.header_items():
+                normalized = str(key).lower()
+                if normalized == "x-request-id":
+                    key = "X-Request-ID"
+                elif normalized == "x-signature":
+                    key = "X-Signature"
+                headers[key] = value
+            connection.request(request.get_method(), path, body=request.data, headers=headers)
+            response = connection.getresponse()
+            status_code = int(response.status)
+            body = response.read().decode("utf-8", errors="replace")[:4000]
+            if status_code == 429:
+                delay = max(state.retry_delay, _retry_after_seconds(response.getheader("Retry-After")))
+                state.limited_until = time.monotonic() + delay
+                state.retry_delay = min(60.0, state.retry_delay * 2)
+                raise RegistrarError(f"Dynadot 请求限流（HTTP 429），冷却 {math.ceil(delay)} 秒后重试")
+            if 200 <= status_code < 300:
+                state.retry_delay = 5.0
+            return status_code, body
+        except (OSError, http.client.HTTPException) as exc:
+            raise RegistrarError(f"注册商 API 网络错误: {exc}") from exc
+        finally:
+            state.next_request_at = time.monotonic() + 1.0
+            connection.close()
 
 
 def _send(request: Request) -> tuple[int, str]:

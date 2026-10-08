@@ -1,5 +1,17 @@
 # Changelog
 
+## [v2.0.1](https://github.com/likew1nd/domain-admin/compare/v2.0.0...v2.0.1) (2026-10-08)
+
+### Features
+
+- Show the last monitor check time in the qualified domains list, refresh it automatically, and retain the original screening query time.
+
+### Fixes and improvements
+
+- Share Dynadot request pacing per endpoint and API key; honor Retry-After and apply increasing cooldowns after HTTP 429 responses.
+- Include availability query failure reasons directly in monitor logs, including rate limits and cooldowns.
+- Add coverage for Dynadot request pacing and monitor error handling.
+
 
 ## [v1.4.0](https://github.com/skyfeiz/soybean-admin-elp/compare/v1.4.0...main) (2026-01-12)
 
@@ -3128,6 +3140,5 @@
 ### &nbsp;&nbsp;&nbsp;❤️ Contributors
 
 [![honghuangdc](https://github.com/honghuangdc.png?size=48)](https://github.com/honghuangdc)&nbsp;&nbsp;[![soybeanjs](https://github.com/soybeanjs.png?size=48)](https://github.com/soybeanjs)&nbsp;&nbsp;
-
 
 

@@ -190,6 +190,7 @@ export interface QueryResult {
   filing_nature: string;
   filing_info: string;
   checked_at: string;
+  last_checked_at: string;
 }
 
 export interface QueryResultPage {

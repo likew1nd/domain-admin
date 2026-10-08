@@ -266,7 +266,7 @@ class MonitorManager:
                 self._log("info", "availability", f"{availability_api['name']}：域名不可注册，继续查询 WHOIS", domain)
             except Exception as exc:
                 self._save_domain_state(domain, "monitoring", str(exc))
-                self._log("warning", "availability", "可注册查询失败，将在下一轮重试", domain, str(exc))
+                self._log("warning", "availability", f"可注册查询失败，将在下一轮重试：{exc}", domain, str(exc))
                 return "error"
 
         self._log("info", "whois", "开始检查注册状态", domain)

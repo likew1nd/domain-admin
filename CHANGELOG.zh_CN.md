@@ -1,5 +1,17 @@
 # 更新日志
 
+## [v2.0.1](https://github.com/likew1nd/domain-admin/compare/v2.0.0...v2.0.1) (2026-10-08)
+
+### 新功能
+
+- 符合域名列表新增“最近监控时间”，随列表自动刷新，并保留原备案查询时间。
+
+### 修复与优化
+
+- Dynadot 同一接口地址及 API Key 的请求共享限速；遇到 HTTP 429 时遵循 Retry-After 并逐步延长冷却时间。
+- 监控日志直接显示可注册查询失败原因，便于查看限流和冷却状态。
+- 补充 Dynadot 请求限速及监控异常处理测试。
+
 ## [v1.0.9](https://github.com/likew1nd/domain-admin/compare/v1.0.8...v1.0.9) (2026-10-06)
 
 ### 🛠 优化

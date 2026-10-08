@@ -529,6 +529,7 @@ const local: App.I18n.Schema = {
         source: '数据来源',
         joinedAt: '加入时间',
         queryTime: '查询时间',
+        lastMonitorTime: '最近监控时间',
         deletionStatus: '删除状态',
         expirationDate: '到期时间',
         creationDate: '注册时间',

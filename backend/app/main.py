@@ -1551,8 +1551,10 @@ def list_query_results(
                c.result, c.reason, c.deletion_status, c.whois_status, c.expiration_date,
                c.creation_date, c.icp_found, c.qq_status, c.wechat_status,
                c.pollution_status, c.blocked_status, c.blacklist_status,
-               c.filing_nature, c.filing_info, c.checked_at
+               c.filing_nature, c.filing_info, c.checked_at,
+               COALESCE(m.last_checked_at, '') AS last_checked_at
         FROM domain_checks c JOIN domains d ON d.domain = c.domain
+        LEFT JOIN monitor_domain_state m ON m.domain = c.domain
         WHERE {where}
         ORDER BY c.checked_at DESC, c.domain
         LIMIT ? OFFSET ?

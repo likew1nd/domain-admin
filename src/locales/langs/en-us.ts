@@ -529,6 +529,7 @@ const local: App.I18n.Schema = {
         source: 'Source',
         joinedAt: 'Added Time',
         queryTime: 'Query Time',
+        lastMonitorTime: 'Last Monitor Check',
         deletionStatus: 'Delete Status',
         expirationDate: 'Expiration Date',
         creationDate: 'Registration Date',

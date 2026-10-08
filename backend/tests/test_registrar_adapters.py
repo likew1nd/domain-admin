@@ -1,11 +1,15 @@
 import base64
 import hashlib
 import hmac
+import time
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from pathlib import Path
 import sys
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.request import Request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,6 +27,130 @@ import app.registrar_adapters as registrar_adapters
 
 
 class RegistrarAdapterTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(registrar_adapters._dynadot_states, clear=True))
+
+    def test_dynadot_parallel_availability_queries_do_not_burst(self):
+        clock = [100.0]
+        request_times = []
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        def connect(*args, **kwargs):
+            response = Mock()
+            response.read.return_value = b'{"available":false}'
+            connection = Mock()
+            connection.getresponse.return_value = response
+
+            def send(*args, **kwargs):
+                limited = bool(request_times and clock[0] - request_times[-1] < 1.0)
+                request_times.append(clock[0])
+                response.status = 429 if limited else 200
+
+            connection.request.side_effect = send
+            return connection
+
+        def check(domain):
+            return DynadotRegistrar({}, "burst-key:secret").check_available(domain)
+
+        with (
+            patch.object(time, "monotonic", side_effect=lambda: clock[0]),
+            patch.object(time, "sleep", side_effect=sleep),
+            patch.object(registrar_adapters.http.client, "HTTPSConnection", side_effect=connect),
+            ThreadPoolExecutor(max_workers=4) as pool,
+        ):
+            results = list(pool.map(check, ["guiyouzs.com", "czicpc.com", "haijingwenhua.com", "inongpu.com"]))
+        self.assertEqual([result.status_code for result in results], [200] * 4)
+        self.assertEqual([result.available for result in results], [False] * 4)
+
+    def test_dynadot_cooldown_is_shared_and_respects_retry_after(self):
+        clock = [100.0]
+        adapter = DynadotRegistrar({}, "api-key:secret")
+        with (
+            patch.object(time, "monotonic", side_effect=lambda: clock[0]),
+            patch.object(time, "sleep") as sleep,
+            patch.object(registrar_adapters.http.client, "HTTPSConnection") as connect,
+        ):
+            connection = connect.return_value
+            response = connection.getresponse.return_value
+            response.status = 429
+            response.read.return_value = b'{}'
+            response.getheader.return_value = "45"
+            with self.assertRaisesRegex(RegistrarError, "429.*45"):
+                adapter.check_available("a.test")
+            connection.request.assert_called_once()
+            connection.close.assert_called_once()
+
+            # Fresh adapters and all DY operations must observe the same cooldown.
+            for operation in (
+                lambda: DynadotRegistrar({}, "api-key:secret").check_available("b.test"),
+                adapter.test,
+                lambda: adapter.register("a.test"),
+            ):
+                with self.assertRaisesRegex(RegistrarError, "冷却中"):
+                    operation()
+            self.assertEqual(connect.call_count, 1)
+
+            # Independent keys and the sandbox are not blocked by this account.
+            response.status = 200
+            response.read.return_value = b'{"available":false}'
+            self.assertFalse(DynadotRegistrar({}, "other-key:secret").check_available("c.test").available)
+            sandbox = DynadotRegistrar({"endpoint": DynadotRegistrar.sandbox_endpoint}, "api-key:secret")
+            self.assertFalse(sandbox.check_available("d.test").available)
+            clock[0] = 144.0
+            with self.assertRaisesRegex(RegistrarError, "约 1 秒"):
+                adapter.check_available("a.test")
+            self.assertEqual(connect.call_count, 3)
+
+            clock[0] = 145.0
+            self.assertFalse(adapter.check_available("a.test").available)
+            self.assertEqual(connect.call_count, 4)
+            sleep.assert_not_called()
+
+    def test_dynadot_repeated_429_backs_off_and_success_resets_delay(self):
+        clock = [100.0]
+        adapter = DynadotRegistrar({}, "api-key:secret")
+        with (
+            patch.object(time, "monotonic", side_effect=lambda: clock[0]),
+            patch.object(time, "sleep") as sleep,
+            patch.object(registrar_adapters.http.client, "HTTPSConnection") as connect,
+        ):
+            response = connect.return_value.getresponse.return_value
+            response.status = 429
+            response.read.return_value = b'{}'
+            response.getheader.return_value = "invalid"
+            for delay in (5, 10, 20, 40, 60, 60):
+                with self.assertRaisesRegex(RegistrarError, f"冷却 {delay} 秒"):
+                    adapter.check_available("a.test")
+                clock[0] += delay
+            self.assertEqual(connect.call_count, 6)  # No implicit retries, including for POST.
+            response.status = 200
+            response.read.return_value = b'{"available":false}'
+            self.assertFalse(adapter.check_available("a.test").available)
+            clock[0] += 1
+            response.status = 429
+            with self.assertRaisesRegex(RegistrarError, "冷却 5 秒"):
+                adapter.register("a.test")
+            self.assertEqual(connect.call_count, 8)
+            sleep.assert_not_called()
+
+    def test_dynadot_retry_after_parses_seconds_and_http_dates(self):
+        now = datetime(2026, 10, 8, 6, 0, 0, tzinfo=timezone.utc)
+        cases = (
+            ("120", 120),
+            (format_datetime(now + timedelta(seconds=90), usegmt=True), 90),
+            (format_datetime(now - timedelta(seconds=10), usegmt=True), 0),
+            (None, 0),
+            ("invalid", 0),
+            ("-3", 0),
+        )
+        with patch.object(registrar_adapters, "datetime") as date:
+            date.now.return_value = now
+            for value, expected in cases:
+                with self.subTest(value=value):
+                    self.assertEqual(registrar_adapters._retry_after_seconds(value), expected)
+
     def test_dynadot_test_rejects_invalid_key_with_http_200(self):
         adapter = DynadotRegistrar({}, "api-key:api-secret")
         with patch.object(adapter, "_request", return_value=(200, '{"code":401,"message":"Unauthorized"}')):

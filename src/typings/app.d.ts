@@ -701,6 +701,7 @@ declare namespace App {
             source: string;
             joinedAt: string;
             queryTime: string;
+            lastMonitorTime: string;
             deletionStatus: string;
             expirationDate: string;
             creationDate: string;
