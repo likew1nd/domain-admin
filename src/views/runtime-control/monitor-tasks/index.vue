@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import {
   type MonitorLog,
   type MonitorSettings,
@@ -25,6 +25,9 @@ const saving = ref(false);
 const actionLoading = ref(false);
 const apis = ref<RegistrarApi[]>([]);
 const logs = ref<MonitorLog[]>([]);
+const logViewport = ref<HTMLElement | null>(null);
+const logAtLatest = ref(true);
+const logsLoading = ref(false);
 const status = ref<MonitorStatus | null>(null);
 const settings = reactive<MonitorSettings>({
   interval_seconds: 30,
@@ -279,8 +282,34 @@ async function loadStatus() {
   status.value = await fetchMonitorStatus();
 }
 
+function handleLogScroll() {
+  const viewport = logViewport.value;
+  logAtLatest.value = !viewport || viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 24;
+}
+
+function scrollLogsToLatest() {
+  if (logViewport.value) logViewport.value.scrollTop = logViewport.value.scrollHeight;
+  logAtLatest.value = true;
+}
+
 async function loadLogs() {
-  logs.value = await fetchMonitorLogs(100);
+  if (logsLoading.value) return;
+  logsLoading.value = true;
+  try {
+    const data = await fetchMonitorLogs(100);
+    // 请求期间用户可能上滑，在更新日志前记录最新的跟随状态和位置。
+    const stickToLatest = logAtLatest.value;
+    const previousScrollTop = logViewport.value?.scrollTop ?? 0;
+    logs.value = data;
+    await nextTick();
+    if (stickToLatest) scrollLogsToLatest();
+    else if (logViewport.value) {
+      logViewport.value.scrollTop = previousScrollTop;
+      handleLogScroll();
+    }
+  } finally {
+    logsLoading.value = false;
+  }
 }
 
 async function loadAll() {
@@ -581,11 +610,21 @@ onBeforeUnmount(() => {
     <ElCard class="card-wrapper">
       <template #header>
         <div class="flex items-center justify-between">
-          <span class="font-16px font-medium">运行日志</span>
-          <ElTag type="info">最新 {{ logs.length }} / 500</ElTag>
+          <div class="flex items-center gap-8px">
+            <span class="font-16px font-medium">运行日志</span>
+            <ElTag v-if="!logAtLatest" type="warning">已暂停跟随</ElTag>
+          </div>
+          <div class="flex items-center gap-8px">
+            <ElButton v-if="!logAtLatest" text type="primary" @click="scrollLogsToLatest">跳到最新</ElButton>
+            <ElTag type="info">最新 {{ logs.length }} / 500</ElTag>
+          </div>
         </div>
       </template>
-      <div class="h-300px overflow-auto overscroll-contain border border-gray-200 rounded-4px dark:border-gray-700">
+      <div
+        ref="logViewport"
+        class="h-300px overflow-auto overscroll-contain border border-gray-200 rounded-4px dark:border-gray-700"
+        @scroll="handleLogScroll"
+      >
         <div
           v-for="log in logs"
           :key="log.id"

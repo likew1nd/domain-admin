@@ -1,5 +1,13 @@
 # Changelog
 
+## [v2.0.3](https://github.com/likew1nd/domain-admin/compare/v2.0.2...v2.0.3) (2026-10-08)
+
+### Fixes and improvements
+
+- Automatically follow the latest monitor logs; pause and preserve the scroll position when scrolling up.
+- Resume following when returning to the bottom or clicking "Jump to latest", with a visible paused indicator.
+- Respect scrolling during pending log requests so refreshes do not pull the view back to the bottom.
+
 ## [v2.0.1](https://github.com/likew1nd/domain-admin/compare/v2.0.0...v2.0.1) (2026-10-08)
 
 ### Features
@@ -3140,5 +3148,4 @@
 ### &nbsp;&nbsp;&nbsp;❤️ Contributors
 
 [![honghuangdc](https://github.com/honghuangdc.png?size=48)](https://github.com/honghuangdc)&nbsp;&nbsp;[![soybeanjs](https://github.com/soybeanjs.png?size=48)](https://github.com/soybeanjs)&nbsp;&nbsp;
-
 
