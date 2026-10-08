@@ -188,8 +188,8 @@ class QueryTaskManager:
                 INSERT INTO query_tasks (
                     name, filters_json, proxy_json, domain_info_source, apihz_id, threads, whois_retries, icp_retries,
                     qq_retries, wechat_retries, douyin_retries, blocked_retries, pollution_retries,
-                    blacklist_retries, continuous, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)
+                    blacklist_retries, random_query, continuous, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?)
                 """,
                 (
                     payload.get("name") or "域名查询任务",
@@ -206,6 +206,7 @@ class QueryTaskManager:
                     max(1, min(99, int(payload.get("blocked_retries", 2) or 2))),
                     max(1, min(99, int(payload.get("pollution_retries", 2) or 2))),
                     max(1, min(99, int(payload.get("blacklist_retries", 2) or 2))),
+                    int(bool(payload.get("random_query", False))),
                     int(bool(payload.get("continuous", True))),
                     timestamp,
                     timestamp,
@@ -304,7 +305,13 @@ class QueryTaskManager:
             "UPDATE query_tasks SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?",
             (now(), now(), task_id),
         )
-        self._log(task_id, "任务", "查询任务开始", detail=f"查询线程 {task['threads']}，持续查询 {'开启' if task['continuous'] else '关闭'}")
+        self._log(
+            task_id, "任务", "查询任务开始",
+            detail=(
+                f"查询线程 {task['threads']}，随机查询 {'开启' if task.get('random_query') else '关闭'}，"
+                f"持续查询 {'开启' if task['continuous'] else '关闭'}"
+            ),
+        )
         filters = json.loads(task["filters_json"] or "{}")
         proxy_config = json.loads(task["proxy_json"] or "{}")
         proxy_stages = set(proxy_config.get("stages") or [])
@@ -339,6 +346,7 @@ class QueryTaskManager:
             queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
             # 保持滚动窗口，避免一个慢域名阻塞下一批域名入队。
             in_flight_domains: set[str] = set()
+            random_candidates: Deque[dict[str, Any]] = deque()
             progress_event = asyncio.Event()
 
             async def process(row: dict[str, Any]) -> None:
@@ -541,17 +549,28 @@ class QueryTaskManager:
                 progress_event.clear()
                 window_size = max(20, task["threads"] * 4)
                 free_slots = max(0, window_size - len(in_flight_domains))
+                pending = self._count_candidates(filters)
+                processed = db.fetch_one("SELECT processed_count FROM query_tasks WHERE id = ?", (task_id,))["processed_count"]
+                known_total = max(known_total, int(processed) + pending)
+                db.execute("UPDATE query_tasks SET total_count = ?, updated_at = ? WHERE id = ?", (known_total, now(), task_id))
                 candidates: list[dict[str, Any]] = []
-                if free_slots:
+                if free_slots and task.get("random_query"):
+                    if not random_candidates and pending > len(in_flight_domains):
+                        # 缓冲 1000 条随机候选，避免每补一个执行名额都扫描全部待查域名。
+                        scanning_domains = in_flight_domains.copy()
+                        rows = await asyncio.to_thread(self._candidates, filters, 1000, True)
+                        # 查询期间已完成的域名也必须排除，防止重新加入队列。
+                        scanning_domains.update(in_flight_domains)
+                        random_candidates.extend(
+                            row for row in rows if row["domain"] not in scanning_domains
+                        )
+                    candidates = [random_candidates.popleft() for _ in range(min(free_slots, len(random_candidates)))]
+                elif free_slots:
                     candidates = [
                         row
                         for row in self._candidates(filters, window_size)
                         if row["domain"] not in in_flight_domains
                     ][:free_slots]
-                pending = self._count_candidates(filters)
-                processed = db.fetch_one("SELECT processed_count FROM query_tasks WHERE id = ?", (task_id,))["processed_count"]
-                known_total = max(known_total, int(processed) + pending)
-                db.execute("UPDATE query_tasks SET total_count = ?, updated_at = ? WHERE id = ?", (known_total, now(), task_id))
                 # 将新候选域名加入滚动窗口；已在处理中的域名不会重复入队。
                 for row in candidates:
                     in_flight_domains.add(row["domain"])
@@ -743,9 +762,11 @@ class QueryTaskManager:
             params.extend(kinds)
         return " AND ".join(conditions), params
 
-    def _candidates(self, filters: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    def _candidates(self, filters: dict[str, Any], limit: int, random_query: bool = False) -> list[dict[str, Any]]:
         where, params = self._where(filters)
-        return db.fetch_all(f"SELECT domain FROM domains WHERE {where} ORDER BY joined_at DESC, domain LIMIT ?", (*params, limit))
+        # ponytail: 随机模式扫描全部候选；仅在补充队列成为瓶颈时再引入随机索引。
+        order = "RANDOM()" if random_query else "joined_at DESC, domain"
+        return db.fetch_all(f"SELECT domain FROM domains WHERE {where} ORDER BY {order} LIMIT ?", (*params, limit))
 
     def _count_candidates(self, filters: dict[str, Any]) -> int:
         where, params = self._where(filters)

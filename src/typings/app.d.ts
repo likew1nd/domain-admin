@@ -819,6 +819,7 @@ declare namespace App {
             proxyAvailable: string;
             proxyAcquired: string;
             proxyHint: string;
+            randomQuery: string;
             continuous: string;
             status: string;
             progress: string;

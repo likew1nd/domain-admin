@@ -117,6 +117,7 @@ const defaultForm: CreateQueryTaskPayload = {
   pollution_retries: 2,
   blacklist_retries: 2,
   intercept_checks: [],
+  random_query: false,
   continuous: true,
   proxy_mode: 'direct',
   proxy_endpoint: '',
@@ -692,9 +693,6 @@ onBeforeUnmount(() => {
                         })
                       }}
                     </span>
-                    <ElButton type="primary" :loading="savingSettings" @click="saveSettings">
-                      {{ $t('page.runtime.queryTasks.saveSettings') }}
-                    </ElButton>
                     <ElButton @click="restoreDefaults">{{ $t('page.runtime.queryTasks.resetDefaults') }}</ElButton>
                     <ElButton text :loading="previewLoading" @click="preview">
                       {{ $t('page.runtime.queryTasks.preview') }}
@@ -1228,6 +1226,10 @@ onBeforeUnmount(() => {
 
                 <div class="mt-8px flex flex-wrap items-center justify-end gap-24px">
                   <div class="flex items-center gap-8px">
+                    <span class="text-14px">{{ $t('page.runtime.queryTasks.randomQuery') }}</span>
+                    <ElSwitch v-model="form.random_query" :aria-label="$t('page.runtime.queryTasks.randomQuery')" />
+                  </div>
+                  <div class="flex items-center gap-8px">
                     <span class="text-14px">{{ $t('page.runtime.queryTasks.continuous') }}</span>
                     <ElSwitch v-model="form.continuous" />
                   </div>
@@ -1235,15 +1237,20 @@ onBeforeUnmount(() => {
                     <span class="text-14px">{{ $t('page.runtime.queryTasks.threads') }}</span>
                     <ElInputNumber v-model="form.threads" class="w-180px" :min="1" :max="50" />
                   </div>
-                  <ElButton
-                    type="primary"
-                    class="w-160px"
-                    :loading="submitting || stopping"
-                    :disabled="submitting || stopping"
-                    @click="handleTaskAction"
-                  >
-                    {{ runningTask ? $t('page.runtime.queryTasks.stop') : $t('page.runtime.queryTasks.start') }}
-                  </ElButton>
+                  <div class="flex items-center">
+                    <ElButton
+                      type="primary"
+                      class="w-160px"
+                      :loading="submitting || stopping"
+                      :disabled="submitting || stopping"
+                      @click="handleTaskAction"
+                    >
+                      {{ runningTask ? $t('page.runtime.queryTasks.stop') : $t('page.runtime.queryTasks.start') }}
+                    </ElButton>
+                    <ElButton type="primary" :loading="savingSettings" @click="saveSettings">
+                      {{ $t('page.runtime.queryTasks.saveSettings') }}
+                    </ElButton>
+                  </div>
                 </div>
               </ElForm>
             </ElCard>

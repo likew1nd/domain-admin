@@ -117,6 +117,12 @@ def _heavy_stats() -> dict[str, Any]:
     }
 
 
+def invalidate_stats() -> None:
+    global _stats_cache
+    with _stats_lock:
+        _stats_cache = None
+
+
 def _rebuild_stats() -> dict[str, Any]:
     global _stats_cache
     with _stats_lock:
@@ -139,6 +145,25 @@ def _cached_stats(refresh: bool) -> dict[str, Any]:
     if time.monotonic() - cache[0] > _STATS_TTL:
         _background_rebuild()
     return cache[1]
+
+
+def _live_stats() -> dict[str, Any]:
+    """Return the small set of counters that must follow query progress."""
+    # 读取 query_time 索引计数，不占用查询任务写库使用的全局锁。
+    with db.get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT (SELECT COUNT(*) FROM domains) AS total,
+                   (SELECT COUNT(*) FROM domains WHERE query_time > '') AS queried
+            """
+        ).fetchone()
+    total, queried = row["total"], row["queried"]
+    return {
+        "total": total,
+        "queried": queried,
+        "pending": total - queried,
+        "queryRate": _ratio(queried, total),
+    }
 
 
 def warm_up() -> None:
@@ -333,7 +358,8 @@ def _activities(limit: int) -> list[dict[str, Any]]:
 def get_dashboard(refresh: bool = Query(default=False)) -> dict[str, Any]:
     runtime = _runtime()
     return ok({
-        "stats": _cached_stats(refresh),
+        # Keep the expensive breakdown cached, but make the counters accurate on first paint too.
+        "stats": {**_cached_stats(refresh), **_live_stats()},
         "checks": _check_stats(),
         "runtime": runtime,
         "alerts": _alerts(runtime),
@@ -345,6 +371,7 @@ def get_dashboard(refresh: bool = Query(default=False)) -> dict[str, Any]:
 def get_dashboard_runtime() -> dict[str, Any]:
     runtime = _runtime()
     return ok({
+        "stats": _live_stats(),
         "checks": _check_stats(),
         "runtime": runtime,
         "alerts": _alerts(runtime),

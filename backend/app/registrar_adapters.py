@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import http.client
 import json
 import re
 import uuid
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 
@@ -49,7 +50,15 @@ def _json_object(value: Any) -> dict[str, Any]:
 
 
 def _split_token(token: str, label: str) -> tuple[str, str]:
-    first, separator, second = token.partition(":")
+    # Credentials are entered as a single ``ID:Secret`` value.  A pasted
+    # production + sandbox pair would otherwise make the second line part of
+    # the secret and result in Dynadot's opaque "X-Signature is not valid"
+    # response.  Reject that input locally without ever including credentials
+    # in the error message.
+    normalized = str(token or "").strip()
+    if "\n" in normalized or "\r" in normalized:
+        raise RegistrarError(f"{label} Token 只能填写一组 ID:Secret，不能包含换行")
+    first, separator, second = normalized.partition(":")
     if not separator or not first or not second:
         raise RegistrarError(f"{label} Token 格式应为：ID:Secret")
     return first.strip(), second.strip()
@@ -125,7 +134,7 @@ def _availability_result(status_code: int, response: str) -> AvailabilityResult:
         payload = None
     if isinstance(payload, dict) and any(payload.get(key) for key in ("error", "errors", "Error", "ErrorMessage")):
         return AvailabilityResult(None, status_code, response, "接口返回错误")
-    if isinstance(payload, dict) and payload.get("code") not in (None, 0, "0", "OK", "Success", "success"):
+    if isinstance(payload, dict) and payload.get("code") not in (None, 0, "0", 200, "200", "OK", "Success", "success"):
         return AvailabilityResult(None, status_code, response, f"接口返回错误码 {payload['code']}")
     result = _find_availability(payload)
     if result is not None:
@@ -183,36 +192,91 @@ class HttpJsonRegistrar(RegistrarAdapter):
 
 
 class DynadotRegistrar(RegistrarAdapter):
-    endpoint = "https://api.dynadot.com/api3.html"
+    endpoint = "https://api.dynadot.com"
+    sandbox_endpoint = "https://api-sandbox.dynadot.com"
 
-    def _request_command(self, command: str, domain: str = "") -> tuple[int, str]:
-        config = _json_object(self.config.get("config_json", self.config.get("config", {})))
-        endpoint = str(config.get("endpoint") or self.config.get("endpoint") or self.endpoint)
-        params: dict[str, Any] = {"key": self.token, "command": command, "duration": str(config.get("duration", 1))}
-        if domain:
-            params["domain"] = domain
-        extra = config.get("extra_params", {})
-        if isinstance(extra, dict):
-            params.update({str(key): str(value) for key, value in extra.items()})
-        return _send(Request(f"{endpoint}?{urlencode(params)}", headers={"Accept": "application/xml, application/json"}))
+    def _config(self) -> dict[str, Any]:
+        return _json_object(self.config.get("config_json", self.config.get("config", {})))
+
+    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> tuple[int, str]:
+        api_key, api_secret = _split_token(self.token, "Dynadot")
+        config = self._config()
+        endpoint = str(config.get("endpoint") or self.config.get("endpoint") or self.endpoint).strip().rstrip("/")
+        if endpoint.endswith("/api3.html"):
+            endpoint = endpoint[: -len("/api3.html")]
+        body = "" if payload is None else json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        request_id = str(uuid.uuid4())
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "X-Request-ID": request_id,
+        }
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+        request_url = f"{endpoint}{path}"
+        parsed_url = urlsplit(request_url)
+        full_path_and_query = urlunsplit(("", "", parsed_url.path or "/", parsed_url.query, ""))
+        # Dynadot v2 always joins all four fields with newlines.  The final
+        # newline is required even when the request body is empty (the
+        # documented form is ``api_key\npath\nrequest_id\n``).
+        string_to_sign = f"{api_key}\n{full_path_and_query}\n{request_id}\n{body}"
+        headers["X-Signature"] = base64.b64encode(
+            hmac.new(api_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha256).digest()
+        ).decode("ascii")
+        return _send_dynadot(Request(request_url, data=body.encode("utf-8") if body else None, headers=headers, method=method))
+
+    @staticmethod
+    def _success(status_code: int, response: str) -> bool:
+        if not 200 <= status_code < 300:
+            return False
+        try:
+            payload = json.loads(response)
+        except json.JSONDecodeError:
+            return _generic_success(status_code, response)
+        if not isinstance(payload, dict):
+            return False
+
+        for key in ("code", "Code"):
+            code = payload.get(key)
+            if code is not None and str(code).lower() not in {"0", "200", "ok", "success"}:
+                return False
+
+        def has_error(value: Any) -> bool:
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    normalized = str(key).replace("_", "").replace("-", "").lower()
+                    text = str(nested).strip().lower()
+                    if normalized in {"error", "errors", "errormessage", "errordescription"} and nested:
+                        return True
+                    if normalized == "status" and text in {"error", "failed", "failure"}:
+                        return True
+                    if normalized == "responsecode" and text not in {"0", "200", "ok", "success"}:
+                        return True
+                    if has_error(nested):
+                        return True
+            elif isinstance(value, list):
+                return any(has_error(item) for item in value)
+            return False
+
+        return not has_error(payload)
 
     def register(self, domain: str) -> RegisterResult:
-        status_code, response = self._request_command("register", domain)
-        text = response.lower()
-        success = _generic_success(status_code, response) and bool(
-            re.search(r"(?:result|response)\s*code[^\d]*(?:0|success)", text) or "success" in text
-        )
-        return RegisterResult(success, status_code, response)
+        config = self._config()
+        payload = config.get("payload") if isinstance(config.get("payload"), dict) else {}
+        payload = dict(payload)
+        payload.setdefault("domain", config.get("domain", {}))
+        if config.get("currency") not in (None, ""):
+            payload.setdefault("currency", config["currency"])
+        status_code, response = self._request("POST", f"/restful/v2/domains/{quote(domain, safe='')}/register", payload)
+        return RegisterResult(self._success(status_code, response), status_code, response)
 
     def check_available(self, domain: str) -> AvailabilityResult:
-        config = _json_object(self.config.get("config_json", self.config.get("config", {})))
-        command = str(config.get("check_command", "search"))
-        status_code, response = self._request_command(command, domain)
+        status_code, response = self._request("GET", f"/restful/v2/domains/{quote(domain, safe='')}/search")
         return _availability_result(status_code, response)
 
     def test(self) -> tuple[bool, int, str]:
-        status_code, response = self._request_command("account_info")
-        return 200 <= status_code < 300 and "error" not in response.lower(), status_code, response
+        status_code, response = self._request("GET", "/restful/v2/accounts/info")
+        return self._success(status_code, response), status_code, response
 
 
 class GnameRegistrar(RegistrarAdapter):
@@ -378,6 +442,34 @@ class AliyunIntlRegistrar(RegistrarAdapter):
             str(config.get("check_action", "CheckDomain")), str(config.get("test_domain", "example.com"))
         )
         return 200 <= status_code < 300 and "InvalidAccessKeyId" not in response, status_code, response
+
+
+def _send_dynadot(request: Request) -> tuple[int, str]:
+    # urllib normalizes ``X-Request-ID`` to ``X-request-id``. Dynadot's
+    # gateway treats that header name as case-sensitive, so use http.client
+    # only for Dynadot and leave other adapters on urllib.
+    parsed = urlsplit(request.full_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise RegistrarError("注册商 API 地址必须以 http:// 或 https:// 开头")
+    connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    path = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    connection = connection_type(parsed.hostname, parsed.port, timeout=20)
+    try:
+        headers = {}
+        for key, value in request.header_items():
+            normalized = str(key).lower()
+            if normalized == "x-request-id":
+                key = "X-Request-ID"
+            elif normalized == "x-signature":
+                key = "X-Signature"
+            headers[key] = value
+        connection.request(request.get_method(), path, body=request.data, headers=headers)
+        response = connection.getresponse()
+        return int(response.status), response.read().decode("utf-8", errors="replace")[:4000]
+    except (OSError, http.client.HTTPException) as exc:
+        raise RegistrarError(f"注册商 API 网络错误: {exc}") from exc
+    finally:
+        connection.close()
 
 
 def _send(request: Request) -> tuple[int, str]:

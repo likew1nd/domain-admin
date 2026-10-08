@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
+import { ElMessageBox } from 'element-plus';
 import {
   type DomainListStats,
   type DomainRecord,
   type DomainStatKey,
+  clearExpiredDomains,
+  deleteFilteredDomains,
+  deleteSelectedDomains,
   fetchDomainPage,
   resetDomainQueryTime
 } from '@/service/api';
@@ -24,11 +28,21 @@ const dateFields: DateField[] = [
 const rows = ref<DomainRecord[]>([]);
 const loading = ref(false);
 const resetting = ref(false);
+type DeleteScope = 'all' | 'selected' | 'filtered';
+const deleting = ref<DeleteScope | ''>('');
+const busy = computed(() => loading.value || resetting.value || Boolean(deleting.value));
+const selectedDomains = ref<string[]>([]);
 const total = ref(0);
 const stats = ref<DomainListStats | null>(null);
 const statsLoading = ref(false);
 
 const searchForm = ref(createDomainFilter(dateFields));
+const appliedFilters = ref(toFilterParams(searchForm.value, dateFields));
+const hasAppliedFilters = computed(() => Object.values(appliedFilters.value).some(value => value.trim()));
+const filtersChanged = computed(
+  () => JSON.stringify(toFilterParams(searchForm.value, dateFields)) !== JSON.stringify(appliedFilters.value)
+);
+let loadRequestId = 0;
 
 const currentPage = ref(1);
 const pageSize = ref(20);
@@ -57,6 +71,9 @@ function hasColumn(key: string) {
 
 /** withStats 为 true 时同时刷新统计卡片；翻页只换数据，不重复统计 */
 async function loadDomains(withStats = false) {
+  loadRequestId += 1;
+  const requestId = loadRequestId;
+  const filters = toFilterParams(searchForm.value, dateFields);
   loading.value = true;
   statsLoading.value = withStats;
   try {
@@ -64,16 +81,23 @@ async function loadDomains(withStats = false) {
       page: currentPage.value,
       page_size: pageSize.value,
       with_stats: withStats ? 'true' : undefined,
-      ...toFilterParams(searchForm.value, dateFields)
+      ...filters
     });
+    if (requestId !== loadRequestId) return;
     rows.value = result.records;
     total.value = result.total;
+    appliedFilters.value = filters;
+    selectedDomains.value = [];
     if (withStats) stats.value = result.stats || null;
   } catch (error) {
-    window.$message?.error(error instanceof Error ? error.message : '加载过期域名失败');
+    if (requestId === loadRequestId) {
+      window.$message?.error(error instanceof Error ? error.message : '加载过期域名失败');
+    }
   } finally {
-    loading.value = false;
-    statsLoading.value = false;
+    if (requestId === loadRequestId) {
+      loading.value = false;
+      statsLoading.value = false;
+    }
   }
 }
 
@@ -104,9 +128,63 @@ function handleSizeChange(size: number) {
   loadDomains();
 }
 
+function handleSelectionChange(selection: DomainRecord[]) {
+  selectedDomains.value = selection.map(row => row.domain);
+}
+
+async function handleDelete(scope: DeleteScope) {
+  if (busy.value) return;
+  if (scope === 'selected' && !selectedDomains.value.length) return;
+  if (scope === 'filtered' && (!hasAppliedFilters.value || filtersChanged.value)) return;
+  const domains = [...selectedDomains.value];
+  const filters = { ...appliedFilters.value };
+  const titles = { all: '清空数据', selected: '批量删除', filtered: '删除数据' };
+  deleting.value = scope;
+  try {
+    const count =
+      scope === 'selected'
+        ? domains.length
+        : (await fetchDomainPage({ ...(scope === 'filtered' ? filters : {}), page: 1, page_size: 1 })).total;
+    if (!count) {
+      window.$message?.info('没有可删除的数据');
+      return;
+    }
+    const descriptions = {
+      all: `将清空过期域名列表的全部 ${count} 条数据，不受当前筛选条件限制。`,
+      selected: `将删除已勾选的 ${count} 条域名数据。`,
+      filtered: `将删除当前已搜索筛选条件匹配的全部 ${count} 条数据，包含所有分页。`
+    };
+    try {
+      await ElMessageBox.confirm(
+        `${descriptions[scope]}对应查询结果也会一并删除，此操作不可恢复。确定继续吗？`,
+        titles[scope],
+        {
+          confirmButtonText: scope === 'all' ? '确认清空' : '确认删除',
+          cancelButtonText: '取消',
+          type: 'warning',
+          closeOnClickModal: false
+        }
+      );
+    } catch {
+      return;
+    }
+    let result: { deleted: number };
+    if (scope === 'all') result = await clearExpiredDomains();
+    else if (scope === 'selected') result = await deleteSelectedDomains(domains);
+    else result = await deleteFilteredDomains(filters);
+    window.$message?.success(`已删除 ${result.deleted} 条域名数据`);
+    currentPage.value = 1;
+    await loadDomains(true);
+  } catch (error) {
+    window.$message?.error(error instanceof Error ? error.message : '删除域名数据失败');
+  } finally {
+    deleting.value = '';
+  }
+}
+
 async function handleResetQueryTime() {
   try {
-    await window.$messageBox?.confirm(
+    await ElMessageBox.confirm(
       '将清空查询结果并重置查询时间，域名、来源、加入时间会保留。确认继续吗？',
       '重置查询数据',
       {
@@ -153,11 +231,41 @@ loadDomains(true);
             <ElTag type="info">{{ $t('page.domain.expired.total', { total }) }}</ElTag>
           </div>
           <div class="flex flex-wrap items-center justify-end gap-8px">
-            <ElButton @click="loadDomains(true)">
+            <ElButton :disabled="Boolean(deleting) || resetting" @click="loadDomains(true)">
               <template #icon><icon-ic-round-refresh /></template>
               刷新
             </ElButton>
-            <ElButton type="warning" plain :loading="resetting" @click="handleResetQueryTime">重置数据</ElButton>
+            <ElButton
+              type="warning"
+              plain
+              :loading="resetting"
+              :disabled="Boolean(deleting) || loading"
+              @click="handleResetQueryTime"
+            >
+              重置数据
+            </ElButton>
+            <ElButton
+              type="danger"
+              plain
+              :loading="deleting === 'selected'"
+              :disabled="!selectedDomains.length || busy"
+              @click="handleDelete('selected')"
+            >
+              批量删除{{ selectedDomains.length ? `（${selectedDomains.length}）` : '' }}
+            </ElButton>
+            <ElButton
+              type="danger"
+              plain
+              :loading="deleting === 'filtered'"
+              :disabled="!total || !hasAppliedFilters || filtersChanged || busy"
+              :title="filtersChanged ? '筛选条件已修改，请先搜索' : '删除当前筛选结果的全部数据（所有分页）'"
+              @click="handleDelete('filtered')"
+            >
+              删除数据
+            </ElButton>
+            <ElButton type="danger" :loading="deleting === 'all'" :disabled="busy" @click="handleDelete('all')">
+              清空数据
+            </ElButton>
             <ElPopover placement="bottom-end" trigger="click" width="240">
               <template #reference>
                 <ElButton>
@@ -180,7 +288,15 @@ loadDomains(true);
         </div>
       </template>
       <div class="table-wrapper">
-        <ElTable v-loading="loading" height="100%" border :data="rows" row-key="domain">
+        <ElTable
+          v-loading="loading"
+          height="100%"
+          border
+          :data="rows"
+          row-key="domain"
+          @selection-change="handleSelectionChange"
+        >
+          <ElTableColumn type="selection" width="48" fixed="left" />
           <ElTableColumn v-if="hasColumn('domain')" prop="domain" label="域名" min-width="180" fixed="left" />
           <ElTableColumn v-if="hasColumn('deletion_status')" prop="deletion_status" label="删除状态" width="100">
             <template #default="{ row }"><DomainStatusTag kind="deletion" :value="row.deletion_status" /></template>

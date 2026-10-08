@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -135,6 +135,51 @@ class SourcePayload(BaseModel):
         return value
 
 
+class DomainListFilters(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    length: str | None = None
+    suffix: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    include_chars: str | None = None
+    exclude_chars: str | None = None
+    domain: str | None = None
+    domain_composition: str | None = None
+    keyword: str | None = None
+    source: str | None = None
+    deletion_status: str | None = None
+    registration_start: str | None = None
+    registration_end: str | None = None
+    expiration_start: str | None = None
+    expiration_end: str | None = None
+    wechat_status: str | None = None
+    qq_status: str | None = None
+    pollution_status: str | None = None
+    blocked_status: str | None = None
+    blacklist_status: str | None = None
+    filing_nature: str | None = None
+    filing_info: str | None = None
+    query_start: str | None = None
+    query_end: str | None = None
+
+    @field_validator("*")
+    @classmethod
+    def trim_values(cls, value: str | None) -> str | None:
+        return value.strip() if value else value
+
+
+class SelectedDomainsPayload(BaseModel):
+    domains: list[str] = Field(min_length=1, max_length=200_000)
+
+    @field_validator("domains")
+    @classmethod
+    def validate_domains(cls, values: list[str]) -> list[str]:
+        if any(not value.strip() for value in values):
+            raise ValueError("请选择要删除的域名")
+        return list(dict.fromkeys(value.strip().lower() for value in values))
+
+
 class GeneratedDomainsPayload(BaseModel):
     domains: list[str] = Field(min_length=1, max_length=200_000)
 
@@ -234,6 +279,7 @@ class QueryTaskPayload(BaseModel):
     pollution_retries: int = Field(default=2, ge=1, le=99)
     blacklist_retries: int = Field(default=2, ge=1, le=99)
     intercept_checks: list[Literal["wechat", "qq", "pollution", "blocked", "blacklist"]] = Field(default_factory=list)
+    random_query: bool = False
     continuous: bool = True
     proxy_mode: Literal["direct", "tunnel", "api"] = "direct"
     proxy_endpoint: str = Field(default="", max_length=500)
@@ -1012,47 +1058,18 @@ def get_run(run_id: int) -> dict[str, Any]:
     return ok(run)
 
 
-@app.get("/api/domains")
-def list_domains(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=200),
-    length: str | None = None,
-    suffix: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    include_chars: str | None = None,
-    exclude_chars: str | None = None,
-    domain: str | None = None,
-    domain_composition: str | None = None,
-    keyword: str | None = None,
-    source: str | None = None,
-    deletion_status: str | None = None,
-    registration_start: str | None = None,
-    registration_end: str | None = None,
-    expiration_start: str | None = None,
-    expiration_end: str | None = None,
-    wechat_status: str | None = None,
-    qq_status: str | None = None,
-    pollution_status: str | None = None,
-    blocked_status: str | None = None,
-    blacklist_status: str | None = None,
-    filing_nature: str | None = None,
-    filing_info: str | None = None,
-    query_start: str | None = None,
-    query_end: str | None = None,
-    with_stats: bool = False,
-) -> dict[str, Any]:
+def domain_list_condition(filters: DomainListFilters) -> tuple[str, list[Any], str]:
     conditions = ["1 = 1"]
     params: list[Any] = []
-    if domain:
+    if filters.domain:
         conditions.append("d.domain LIKE ?")
-        params.append(f"%{domain.strip()}%")
-    if composition := parse_composition_filter(domain_composition):
+        params.append(f"%{filters.domain.strip()}%")
+    if composition := parse_composition_filter(filters.domain_composition):
         condition, kinds = db.label_kind_condition(composition, "d.label_kind")
         conditions.append(condition)
         params.extend(kinds)
-    if keyword:
-        value = f"%{keyword.strip()}%"
+    if filters.keyword:
+        value = f"%{filters.keyword.strip()}%"
         keyword_fields = [
             "d.domain",
             "COALESCE(c.deletion_status, '')",
@@ -1071,46 +1088,46 @@ def list_domains(
         ]
         conditions.append(f"({ ' OR '.join(f'{field} LIKE ?' for field in keyword_fields) })")
         params.extend([value] * len(keyword_fields))
-    if source:
+    if filters.source:
         conditions.append("d.source_name LIKE ?")
-        params.append(f"%{source.strip()}%")
-    lengths = parse_length_filter(length)
+        params.append(f"%{filters.source.strip()}%")
+    lengths = parse_length_filter(filters.length)
     if lengths:
         placeholders = ','.join('?' for _ in lengths)
         conditions.append(f"length(substr(d.domain, 1, length(d.domain) - instr(reverse(d.domain), '.') )) IN ({placeholders})")
         params.extend(lengths)
-    if suffix:
-        suffixes = split_filter_values(suffix)
+    if filters.suffix:
+        suffixes = split_filter_values(filters.suffix)
         if suffixes:
             conditions.append("(" + " OR ".join("lower(d.domain) LIKE ?" for _ in suffixes) + ")")
             params.extend(f"%{item}" for item in suffixes)
-    if start_date:
-        ensure_date_format(start_date)
+    if filters.start_date:
+        ensure_date_format(filters.start_date)
         conditions.append("joined_at >= ?")
-        params.append(start_date)
-    if end_date:
-        ensure_date_format(end_date)
+        params.append(filters.start_date)
+    if filters.end_date:
+        ensure_date_format(filters.end_date)
         conditions.append("joined_at <= ?")
-        params.append(end_date)
-    if include_chars:
+        params.append(filters.end_date)
+    if filters.include_chars:
         conditions.append("lower(d.domain) LIKE ?")
-        params.append(f"%{include_chars.strip().lower()}%")
-    if exclude_chars:
+        params.append(f"%{filters.include_chars.strip().lower()}%")
+    if filters.exclude_chars:
         conditions.append("lower(d.domain) NOT LIKE ?")
-        params.append(f"%{exclude_chars.strip().lower()}%")
-    for field, value in (("c.deletion_status", deletion_status), ("COALESCE(c.wechat_status, '否')", wechat_status),
-                         ("COALESCE(c.qq_status, '否')", qq_status), ("COALESCE(c.pollution_status, '否')", pollution_status),
-                         ("COALESCE(c.blocked_status, '否')", blocked_status), ("COALESCE(c.blacklist_status, '否')", blacklist_status),
-                         ("c.filing_nature", filing_nature)):
+        params.append(f"%{filters.exclude_chars.strip().lower()}%")
+    for field, value in (("c.deletion_status", filters.deletion_status), ("COALESCE(c.wechat_status, '否')", filters.wechat_status),
+                         ("COALESCE(c.qq_status, '否')", filters.qq_status), ("COALESCE(c.pollution_status, '否')", filters.pollution_status),
+                         ("COALESCE(c.blocked_status, '否')", filters.blocked_status), ("COALESCE(c.blacklist_status, '否')", filters.blacklist_status),
+                         ("c.filing_nature", filters.filing_nature)):
         if value:
             conditions.append(f"{field} = ?")
             params.append(value)
-    if filing_info:
+    if filters.filing_info:
         conditions.append("c.filing_info LIKE ?")
-        params.append(f"%{filing_info.strip()}%")
-    for field, start, end in (("c.creation_date", registration_start, registration_end),
-                              ("c.expiration_date", expiration_start, expiration_end),
-                              ("COALESCE(NULLIF(d.query_time, ''), c.checked_at, '')", query_start, query_end)):
+        params.append(f"%{filters.filing_info.strip()}%")
+    for field, start, end in (("c.creation_date", filters.registration_start, filters.registration_end),
+                              ("c.expiration_date", filters.expiration_start, filters.expiration_end),
+                              ("COALESCE(NULLIF(d.query_time, ''), c.checked_at, '')", filters.query_start, filters.query_end)):
         is_query_time = "query_time" in field
         if start:
             ensure_date_format(start)
@@ -1124,6 +1141,17 @@ def list_domains(
     where = " AND ".join(conditions)
     # 没有用到查询结果字段时，统计总数无需关联 domain_checks
     count_join = " LEFT JOIN domain_checks c ON c.domain = d.domain" if any("c." in item for item in conditions) else ""
+    return where, params, count_join
+
+
+@app.get("/api/domains")
+def list_domains(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    filters: DomainListFilters = Depends(),
+    with_stats: bool = False,
+) -> dict[str, Any]:
+    where, params, count_join = domain_list_condition(filters)
     total = db.fetch_one(f"SELECT COUNT(*) AS total FROM domains d{count_join} WHERE {where}", tuple(params))["total"]
     stats = None
     if with_stats:
@@ -1164,6 +1192,37 @@ def list_domains(
     if stats is not None:
         data["stats"] = stats
     return ok(data)
+
+
+def delete_domain_records(
+    filters: DomainListFilters | None = None, domains: list[str] | None = None
+) -> dict[str, Any]:
+    global _suffix_cache
+    where, params, joins = domain_list_condition(filters or DomainListFilters())
+    if filters is not None and where == "1 = 1":
+        raise fail("请先设置筛选条件；删除全部数据请使用清空数据")
+    try:
+        deleted = db.delete_domains(where, tuple(params), joins, domains)
+    except RuntimeError as exc:
+        raise fail(str(exc), 409) from exc
+    _suffix_cache = None
+    dashboard.invalidate_stats()
+    return ok({"deleted": deleted})
+
+
+@app.delete("/api/domains")
+def clear_domains() -> dict[str, Any]:
+    return delete_domain_records()
+
+
+@app.post("/api/domains/delete-selected")
+def delete_selected_domains(payload: SelectedDomainsPayload) -> dict[str, Any]:
+    return delete_domain_records(domains=payload.domains)
+
+
+@app.post("/api/domains/delete-filtered")
+def delete_filtered_domains(payload: DomainListFilters) -> dict[str, Any]:
+    return delete_domain_records(filters=payload)
 
 
 @app.post("/api/domains/generated")
@@ -1237,6 +1296,7 @@ def get_query_settings() -> dict[str, Any]:
                     "apihz_id": "",
                     "apihz_key": "",
                     "apihz_key_configured": apihz_client.has_api_key(),
+                    "random_query": False,
                 },
                 "updated_at": "",
             }
@@ -1248,6 +1308,7 @@ def get_query_settings() -> dict[str, Any]:
     settings["domain_composition"] = db.normalize_composition(settings.get("domain_composition"))
     settings.setdefault("domain_info_source", "whois")
     settings.setdefault("apihz_id", "")
+    settings.setdefault("random_query", False)
     settings["apihz_key"] = ""
     settings["apihz_key_configured"] = apihz_client.has_api_key()
     return ok({"settings": settings, "updated_at": row["updated_at"]})
@@ -1336,6 +1397,7 @@ def create_query_task(payload: QueryTaskPayload) -> dict[str, Any]:
                 "blocked_retries": payload.blocked_retries,
                 "pollution_retries": payload.pollution_retries,
                 "blacklist_retries": payload.blacklist_retries,
+                "random_query": payload.random_query,
                 "continuous": payload.continuous,
                 "proxy": {
                     "mode": payload.proxy_mode,

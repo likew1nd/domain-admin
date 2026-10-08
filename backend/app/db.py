@@ -176,6 +176,7 @@ def init_db() -> None:
                 wechat_retries INTEGER NOT NULL DEFAULT 1,
                 douyin_retries INTEGER NOT NULL DEFAULT 1,
                 blocked_retries INTEGER NOT NULL DEFAULT 2,
+                random_query INTEGER NOT NULL DEFAULT 0,
                 continuous INTEGER NOT NULL DEFAULT 1,
                 status TEXT NOT NULL DEFAULT 'created',
                 stop_requested INTEGER NOT NULL DEFAULT 0,
@@ -424,6 +425,7 @@ def init_db() -> None:
             "blocked_retries": "INTEGER NOT NULL DEFAULT 2",
             "pollution_retries": "INTEGER NOT NULL DEFAULT 2",
             "blacklist_retries": "INTEGER NOT NULL DEFAULT 2",
+            "random_query": "INTEGER NOT NULL DEFAULT 0",
             "proxy_acquired_count": "INTEGER NOT NULL DEFAULT 0",
             "proxy_current_available": "INTEGER NOT NULL DEFAULT 0",
             "proxy_current_ip": "TEXT NOT NULL DEFAULT ''",
@@ -515,6 +517,49 @@ def execute(sql: str, params: tuple[Any, ...] = ()) -> int:
     with _db_lock, get_connection() as connection:
         cursor = connection.execute(sql, params)
         return int(cursor.lastrowid or 0)
+
+
+def delete_domains(
+    where: str, params: tuple[Any, ...], joins: str, domains: list[str] | None = None
+) -> int:
+    if domains is not None and not domains:
+        raise ValueError("请选择要删除的域名")
+    with _db_lock, get_connection() as connection:
+        # 状态检查和删除共用写事务；新查询/监控必须先写入运行状态才能读取候选。
+        connection.execute("BEGIN IMMEDIATE")
+        if connection.execute(
+            "SELECT 1 FROM query_tasks WHERE status IN ('created', 'running') LIMIT 1"
+        ).fetchone():
+            raise RuntimeError("请先停止正在运行的查询任务")
+        if connection.execute(
+            "SELECT 1 FROM monitor_state WHERE status IN ('running', 'stopping') LIMIT 1"
+        ).fetchone():
+            raise RuntimeError("请先停止正在运行的监控任务")
+
+        clear_all = domains is None and where == "1 = 1"
+        targets = "domains" if clear_all else "domain_delete_targets"
+        if not clear_all:
+            # 筛选可能依赖查询结果，先在 SQLite 中固定目标，避免清理结果后筛选失效。
+            connection.execute("CREATE TEMP TABLE domain_delete_targets (domain TEXT PRIMARY KEY) WITHOUT ROWID")
+            if domains is not None:
+                for offset in range(0, len(domains), 500):
+                    batch = domains[offset:offset + 500]
+                    placeholders = ",".join("?" for _ in batch)
+                    connection.execute(
+                        "INSERT OR IGNORE INTO domain_delete_targets SELECT domain FROM domains "
+                        f"WHERE domain IN ({placeholders})", batch
+                    )
+            else:
+                connection.execute(
+                    f"INSERT INTO domain_delete_targets SELECT d.domain FROM domains d{joins} WHERE {where}", params
+                )
+        for table in ("domain_checks", "monitor_domain_state"):
+            connection.execute(f"DELETE FROM {table} WHERE domain IN (SELECT domain FROM {targets})")
+        clause = "" if clear_all else " WHERE domain IN (SELECT domain FROM domain_delete_targets)"
+        deleted = connection.execute(f"DELETE FROM domains{clause}").rowcount
+        if not clear_all:
+            connection.execute("DROP TABLE domain_delete_targets")
+        return deleted
 
 
 def claim_schedule(schedule_id: int, run_key: str) -> bool:

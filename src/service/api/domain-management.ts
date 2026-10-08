@@ -125,6 +125,7 @@ export interface QueryTask {
   blocked_retries: number;
   pollution_retries: number;
   blacklist_retries: number;
+  random_query: boolean | number;
   continuous: boolean | number;
   status: 'created' | 'running' | 'completed' | 'stopped' | 'failed';
   stop_requested: boolean | number;
@@ -262,6 +263,24 @@ export function fetchDomainPage(params: Record<string, string | number | undefin
   return domainRequest<DomainPage>(`/domains?${search.toString()}`);
 }
 
+export function clearExpiredDomains() {
+  return domainRequest<{ deleted: number }>('/domains', { method: 'DELETE' });
+}
+
+export function deleteSelectedDomains(domains: string[]) {
+  return domainRequest<{ deleted: number }>('/domains/delete-selected', {
+    method: 'POST',
+    body: JSON.stringify({ domains })
+  });
+}
+
+export function deleteFilteredDomains(filters: Record<string, string>) {
+  return domainRequest<{ deleted: number }>('/domains/delete-filtered', {
+    method: 'POST',
+    body: JSON.stringify(filters)
+  });
+}
+
 export function fetchDomainSuffixes() {
   return domainRequest<DomainSuffix[]>('/domains/suffixes');
 }
@@ -318,6 +337,7 @@ export interface CreateQueryTaskPayload {
   pollution_retries: number;
   blacklist_retries: number;
   intercept_checks: InterceptCheckItem[];
+  random_query: boolean;
   continuous: boolean;
   proxy_mode: 'direct' | 'tunnel' | 'api';
   proxy_endpoint: string;
@@ -762,6 +782,7 @@ export interface DashboardActivity {
 }
 
 export interface DashboardLive {
+  stats: Pick<DashboardStats, 'total' | 'queried' | 'pending' | 'queryRate'>;
   checks: DashboardChecks;
   runtime: DashboardRuntime;
   alerts: DashboardAlert[];

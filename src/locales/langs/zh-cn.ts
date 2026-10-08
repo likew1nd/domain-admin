@@ -648,6 +648,7 @@ const local: App.I18n.Schema = {
         proxyAvailable: '代理池可用 {count} 次',
         proxyAcquired: '累计获取 {count} 个 IP',
         proxyHint: '代理池缓存耗尽或代理失败后才重新请求 IP，减少按 IP 计费的浪费。',
+        randomQuery: '随机查询',
         continuous: '持续查询',
         status: '状态',
         progress: '进度',

@@ -54,6 +54,7 @@ async function loadLive() {
   if (!data.value || loading.value) return;
   try {
     const live = await fetchDashboardRuntime();
+    data.value.stats = { ...data.value.stats, ...live.stats };
     // 内容未变化时不替换，避免图表每次刷新都重播动画
     if (!sameJson(live.checks, data.value.checks)) data.value.checks = live.checks;
     data.value.runtime = live.runtime;
@@ -462,7 +463,7 @@ const riskList = computed(() => {
             <p class="welcome-desc">
               {{ todayText }}
               <template v-if="stats">
-                · 统计更新于 {{ formatDateTime(stats.generatedAt) }}，运行状态每 15 秒自动刷新
+                · 统计明细更新于 {{ formatDateTime(stats.generatedAt) }}，查询计数每 15 秒同步
               </template>
             </p>
           </div>

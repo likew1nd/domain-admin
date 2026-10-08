@@ -41,7 +41,7 @@ const apiSaving = ref(false);
 const apiTesting = ref<number | null>(null);
 const adapterOptions = [
   { value: 'aliyun_intl', label: '阿里云国际', endpoint: 'https://domain-intl.aliyuncs.com/' },
-  { value: 'dynadot', label: 'Dynadot', endpoint: 'https://api.dynadot.com/api3.html' },
+  { value: 'dynadot', label: 'Dynadot', endpoint: 'https://api.dynadot.com' },
   { value: 'gname', label: 'GNAME', endpoint: 'https://api.gname.com' },
   { value: 'godaddy', label: 'GoDaddy', endpoint: 'https://api.godaddy.com/v1/domains' }
 ] as const;
@@ -58,7 +58,7 @@ const apiForm = reactive<RegistrarApiPayload>({
 const tokenPlaceholder = computed(() => {
   const placeholders: Record<RegistrarApiPayload['adapter'], string> = {
     aliyun_intl: 'AccessKeyId:AccessKeySecret',
-    dynadot: 'Dynadot API Key',
+    dynadot: 'API密钥:API Secret（API密码）',
     gname: 'AppID:AppKey',
     godaddy: 'API Key:API Secret',
     http_json: '不使用通用 HTTP JSON'
@@ -119,31 +119,32 @@ const configGuides: Record<
     ]
   },
   dynadot: {
-    summary: 'Dynadot 配置最少只需要注册年限；Token 填写 Dynadot API Key。',
+    summary: 'Dynadot 使用 RESTful v2；Token 填写 API密钥:API Secret（API密码）。',
     fields: [
-      { key: 'duration', label: '注册年限', description: '注册域名的年数，填数字。', example: '1' },
+      {
+        key: 'payload',
+        label: '注册请求体（可选）',
+        description: '需要自定义注册参数时填写 JSON 对象；至少按官方文档提供 domain 对象。',
+        example: '{"domain":{}}'
+      },
+      {
+        key: 'currency',
+        label: '结算币种（可选）',
+        description: '注册请求使用的币种，例如 USD；也可以直接放进 payload。',
+        example: 'USD'
+      },
       {
         key: 'endpoint',
         label: '接口地址（可选）',
         description: '只有使用自定义接口地址时才填写，通常留空使用官方地址。',
-        example: 'https://api.dynadot.com/api3.html'
-      },
-      {
-        key: 'extra_params',
-        label: '额外参数（可选）',
-        description: '需要传给 Dynadot 的其他参数，必须是 JSON 对象。',
-        example: '{"currency":"USD"}'
-      },
-      {
-        key: 'check_command',
-        label: '可注册查询命令',
-        description: '监控时查询域名是否可注册的命令，默认使用 search。',
-        example: 'search'
+        example: 'https://api.dynadot.com'
       }
     ],
     notes: [
-      'Token 只填写 API Key，不要加 Bearer 或其他前缀。',
-      '官方接口默认地址为 https://api.dynadot.com/api3.html。'
+      'Token 格式为 API密钥:API Secret，不要加 Bearer 或其他前缀。',
+      'API 密钥和 API Secret 必须是同一次生成、同一环境（生产或沙盒）的一对；不要填写账户登录密码。',
+      '生产 API 地址为 https://api.dynadot.com；沙盒 API 地址为 https://api-sandbox.dynadot.com。请按凭据所属环境填写接口地址。',
+      '两项凭据都在 Dynadot API 页面生成；不要把生产和沙盒两行凭据一起粘贴到 Token。'
     ]
   },
   gname: {
@@ -339,7 +340,7 @@ function selectAdapter(value: RegistrarApiPayload['adapter']) {
   const templates: Record<RegistrarApiPayload['adapter'], string> = {
     aliyun_intl:
       '{\n  "register_action": "CreateOrder",\n  "check_action": "CheckDomain",\n  "SubscriptionType": "New",\n  "Period": 1,\n  "RegistrantProfileId": "填写注册人资料 ID"\n}',
-    dynadot: '{\n  "duration": 1,\n  "check_command": "search"\n}',
+    dynadot: '{\n  "payload": {},\n  "currency": "USD"\n}',
     gname: '{\n  "register_path": "/domain/reg",\n  "test_path": "/user/info",\n  "check_path": "/domain/check"\n}',
     godaddy:
       '{\n  "period": 1,\n  "renew_auto": false,\n  "privacy": true,\n  "consent": {},\n  "contactRegistrant": {},\n  "contactAdmin": {},\n  "contactBilling": {},\n  "contactTech": {}\n}',
@@ -407,7 +408,12 @@ async function testApi(api: RegistrarApi) {
   try {
     const result = await testRegistrarApi(api.id);
     if (result.success) window.$message?.success(`连接成功（HTTP ${result.status_code}）`);
-    else window.$message?.warning(`接口返回 HTTP ${result.status_code}`);
+    else {
+      const detail = result.response?.trim().replace(/\s+/g, ' ').slice(0, 160);
+      const signatureInvalid = detail?.includes('X-Signature') && detail.toLowerCase().includes('not valid');
+      const hint = signatureInvalid ? '；签名校验失败，请核对同一环境的 API Key/Secret，并确认后端已更新' : '';
+      window.$message?.warning(`鉴权失败（HTTP ${result.status_code}）${hint}${detail ? `：${detail}` : ''}`);
+    }
   } catch (error) {
     window.$message?.error(error instanceof Error ? error.message : '测试 API 失败');
   } finally {

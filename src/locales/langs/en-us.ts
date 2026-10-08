@@ -648,6 +648,7 @@ const local: App.I18n.Schema = {
         proxyAvailable: 'Proxy pool: {count} requests left',
         proxyAcquired: 'IPs acquired: {count}',
         proxyHint: 'The IP API is called only after the proxy pool is empty or a proxy fails.',
+        randomQuery: 'Random query',
         continuous: 'Keep querying',
         status: 'Status',
         progress: 'Progress',
