@@ -616,12 +616,19 @@ export function deleteSource(sourceId: number) {
   return domainRequest<{ deleted: number; removed_schedules: number }>(`/sources/${sourceId}`, { method: 'DELETE' });
 }
 
-export function queueCollection(payload: { source_id: number; requested_date: string; file_format: string }) {
+export function queueCollection(payload: {
+  source_id: number;
+  requested_date: string;
+  file_format: string;
+  suffixes?: string[];
+}) {
   return domainRequest<{ run_id: number }>('/collect', { method: 'POST', body: JSON.stringify(payload) });
 }
 
-export function queueLatest(sourceId: number, fileFormat = 'txt') {
-  return domainRequest<{ run_id: number }>(`/collect/latest?source_id=${sourceId}&file_format=${fileFormat}`, {
+export function queueLatest(sourceId: number, fileFormat = 'txt', suffixes: string[] = []) {
+  const search = new URLSearchParams({ source_id: String(sourceId), file_format: fileFormat });
+  suffixes.forEach(suffix => search.append('suffixes', suffix));
+  return domainRequest<{ run_id: number }>(`/collect/latest?${search.toString()}`, {
     method: 'POST'
   });
 }
@@ -630,13 +637,17 @@ export function queueWestSuffixes(payload: { source_id: number; suffixes: string
   return domainRequest<{ run_ids: number[] }>('/collect/west', { method: 'POST', body: JSON.stringify(payload) });
 }
 
-export function uploadTxtCollection(payload: { sourceId: number; requestedDate: string; file: File }) {
+export function uploadTxtCollection(payload: {
+  sourceId: number;
+  requestedDate: string;
+  file: File;
+  suffixes?: string[];
+}) {
   const formData = new FormData();
   formData.append('file', payload.file);
-  return domainRequest<{ run_id: number }>(
-    `/collect/upload?source_id=${payload.sourceId}&requested_date=${encodeURIComponent(payload.requestedDate)}`,
-    { method: 'POST', body: formData }
-  );
+  const search = new URLSearchParams({ source_id: String(payload.sourceId), requested_date: payload.requestedDate });
+  payload.suffixes?.forEach(suffix => search.append('suffixes', suffix));
+  return domainRequest<{ run_id: number }>(`/collect/upload?${search.toString()}`, { method: 'POST', body: formData });
 }
 
 export function fetchRuns(limit = 50, scope: 'all' | 'manual' | 'scheduled' = 'all') {

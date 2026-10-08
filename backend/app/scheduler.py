@@ -58,7 +58,7 @@ class DailyScheduler:
                 if source.get("adapter") == "west_cn":
                     queue_west_suffixes(schedule["source_id"], suffixes, run_key, "schedule")
                 else:
-                    queue_latest(schedule["source_id"], "txt", "schedule")
+                    queue_latest(schedule["source_id"], "txt", "schedule", suffixes=suffixes)
             except Exception:
                 # The next scheduled day will retry after a transient source failure.
                 continue

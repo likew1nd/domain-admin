@@ -56,7 +56,8 @@ const collectionForm = reactive({
 });
 const txtForm = reactive({
   sourceId: 0,
-  date: new Date().toISOString().slice(0, 10)
+  date: new Date().toISOString().slice(0, 10),
+  suffixes: ''
 });
 const scheduleForm = reactive({
   sourceId: 0,
@@ -68,8 +69,25 @@ const scheduleForm = reactive({
 const editingScheduleId = ref<number>();
 const selectedSource = computed(() => sources.value.find(source => source.id === collectionForm.sourceId));
 const isWestSource = computed(() => selectedSource.value?.adapter === 'west_cn');
+const isGnameSource = computed(() => selectedSource.value?.adapter === 'gname');
+const isTxtGnameSource = computed(
+  () => sources.value.find(source => source.id === txtForm.sourceId)?.adapter === 'gname'
+);
 const scheduleSource = computed(() => sources.value.find(source => source.id === scheduleForm.sourceId));
 const isScheduleWestSource = computed(() => scheduleSource.value?.adapter === 'west_cn');
+const isScheduleGnameSource = computed(() => scheduleSource.value?.adapter === 'gname');
+const gnameSuffixHint = '仅指定后缀入库，留空全部；多个后缀用逗号或空格分隔。';
+
+function parseSuffixes(value: string) {
+  return [
+    ...new Set(
+      value
+        .split(/[\s,，、]+/)
+        .map(item => item.toLowerCase().replace(/^\.+(?=[^.])/, ''))
+        .filter(Boolean)
+    )
+  ];
+}
 
 function createDefaultForm(): SourceForm {
   return {
@@ -145,6 +163,7 @@ function openEdit(source: DomainSource) {
 }
 
 function handleSourceChange(sourceId: number) {
+  collectionForm.suffixes = '';
   const source = sources.value.find(item => item.id === sourceId);
   if (source?.adapter === 'west_cn') collectionForm.format = 'txt';
 }
@@ -226,11 +245,8 @@ async function handleCollect(latest = false) {
     window.$message?.warning('请先选择数据源');
     return;
   }
+  const suffixes = isWestSource.value || isGnameSource.value ? parseSuffixes(collectionForm.suffixes) : [];
   if (isWestSource.value) {
-    const suffixes = collectionForm.suffixes
-      .split(/[\s,，、]+/)
-      .map(item => item.trim().toLowerCase().replace(/^\./, ''))
-      .filter(Boolean);
     if (!suffixes.length) {
       window.$message?.warning('西部数码请先填写要采集的域名后缀，例如：com,cn,vip');
       return;
@@ -249,11 +265,12 @@ async function handleCollect(latest = false) {
   }
   try {
     const result = latest
-      ? await queueLatest(collectionForm.sourceId, collectionForm.format)
+      ? await queueLatest(collectionForm.sourceId, collectionForm.format, suffixes)
       : await queueCollection({
           source_id: collectionForm.sourceId,
           requested_date: collectionForm.date,
-          file_format: collectionForm.format
+          file_format: collectionForm.format,
+          suffixes
         });
     window.$message?.success(`采集任务 #${result.run_id} 已创建`);
     await loadData();
@@ -274,6 +291,7 @@ function openTxtImport() {
   }
   txtForm.sourceId = collectionForm.sourceId || sources.value[0].id;
   txtForm.date = new Date().toISOString().slice(0, 10);
+  txtForm.suffixes = isGnameSource.value ? collectionForm.suffixes : '';
   resetTxtUpload();
   txtDialogVisible.value = true;
 }
@@ -312,7 +330,8 @@ async function handleTxtImport() {
     const result = await uploadTxtCollection({
       sourceId: txtForm.sourceId,
       requestedDate: txtForm.date,
-      file: txtFile.value
+      file: txtFile.value,
+      suffixes: isTxtGnameSource.value ? parseSuffixes(txtForm.suffixes) : []
     });
     window.$message?.success(`TXT 导入任务 #${result.run_id} 已创建`);
     txtDialogVisible.value = false;
@@ -331,10 +350,8 @@ async function handleSaveSchedule() {
     return;
   }
   try {
-    const suffixes = scheduleForm.suffixes
-      .split(/[\s,，、]+/)
-      .map(item => item.trim().toLowerCase().replace(/^\./, ''))
-      .filter(Boolean);
+    const suffixes =
+      isScheduleWestSource.value || isScheduleGnameSource.value ? parseSuffixes(scheduleForm.suffixes) : [];
     if (isScheduleWestSource.value && !suffixes.length) {
       window.$message?.warning('西部数码定时任务请填写要采集的域名后缀');
       return;
@@ -605,9 +622,12 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
                   </ElSelect>
                 </ElFormItem>
               </ElCol>
-              <ElCol v-if="isWestSource" :lg="8" :md="12" :sm="24">
-                <ElFormItem label="采集后缀">
-                  <ElInput v-model="collectionForm.suffixes" placeholder="例如：com,cn,vip" clearable />
+              <ElCol v-if="isWestSource || isGnameSource" :lg="8" :md="12" :sm="24">
+                <ElFormItem :label="isGnameSource ? '入库后缀' : '采集后缀'">
+                  <ElInput v-model="collectionForm.suffixes" placeholder="例如：com,net,com.cn" clearable />
+                  <p v-if="isGnameSource" class="mt-4px text-12px text-gray-500 leading-normal">
+                    {{ gnameSuffixHint }}
+                  </p>
                 </ElFormItem>
               </ElCol>
               <ElCol v-if="!isWestSource" :lg="6" :md="12" :sm="24">
@@ -672,14 +692,17 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
             <ElRow :gutter="24">
               <ElCol :lg="6" :md="12" :sm="24">
                 <ElFormItem :label="$t('page.runtime.taskDetails.source')">
-                  <ElSelect v-model="scheduleForm.sourceId" class="w-full">
+                  <ElSelect v-model="scheduleForm.sourceId" class="w-full" @change="scheduleForm.suffixes = ''">
                     <ElOption v-for="source in sources" :key="source.id" :label="source.name" :value="source.id" />
                   </ElSelect>
                 </ElFormItem>
               </ElCol>
-              <ElCol v-if="isScheduleWestSource" :lg="6" :md="12" :sm="24">
-                <ElFormItem label="导出后缀">
-                  <ElInput v-model="scheduleForm.suffixes" placeholder="例如：com,cn,vip" />
+              <ElCol v-if="isScheduleWestSource || isScheduleGnameSource" :lg="6" :md="12" :sm="24">
+                <ElFormItem :label="isScheduleGnameSource ? '入库后缀' : '导出后缀'">
+                  <ElInput v-model="scheduleForm.suffixes" placeholder="例如：com,net,com.cn" clearable />
+                  <p v-if="isScheduleGnameSource" class="mt-4px text-12px text-gray-500 leading-normal">
+                    {{ gnameSuffixHint }}
+                  </p>
                 </ElFormItem>
               </ElCol>
               <ElCol :lg="6" :md="12" :sm="24">
@@ -719,6 +742,9 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
           <ElTable v-loading="loading" :data="schedules" border row-key="id">
             <ElTableColumn prop="name" :label="$t('page.runtime.taskDetails.name')" min-width="180" />
             <ElTableColumn prop="source_name" :label="$t('page.runtime.taskDetails.source')" width="140" />
+            <ElTableColumn label="指定后缀" min-width="160" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.suffixes?.join(', ') || '全部' }}</template>
+            </ElTableColumn>
             <ElTableColumn prop="run_time" :label="$t('page.runtime.taskDetails.runTime')" width="110" />
             <ElTableColumn :label="$t('page.runtime.taskDetails.lastRun')" min-width="190">
               <template #default="{ row }">
@@ -775,12 +801,16 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
     <ElDialog v-model="txtDialogVisible" title="导入 TXT 文件" width="520px" destroy-on-close>
       <ElForm :model="txtForm" label-width="88px">
         <ElFormItem label="数据源">
-          <ElSelect v-model="txtForm.sourceId" class="w-full">
+          <ElSelect v-model="txtForm.sourceId" class="w-full" @change="txtForm.suffixes = ''">
             <ElOption v-for="source in sources" :key="source.id" :label="source.name" :value="source.id" />
           </ElSelect>
         </ElFormItem>
         <ElFormItem label="数据日期">
           <ElDatePicker v-model="txtForm.date" class="w-full" type="date" value-format="YYYY-MM-DD" />
+        </ElFormItem>
+        <ElFormItem v-if="isTxtGnameSource" label="入库后缀">
+          <ElInput v-model="txtForm.suffixes" placeholder="例如：com,net,com.cn" clearable />
+          <p class="mt-4px text-12px text-gray-500 leading-normal">{{ gnameSuffixHint }}</p>
         </ElFormItem>
         <ElFormItem label="TXT 文件">
           <ElUpload

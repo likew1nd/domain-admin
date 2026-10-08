@@ -14,7 +14,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from . import apihz_client, boce_client, dashboard, db, system_manage, updater
-from .collector import queue_date, queue_file, queue_latest, queue_west_suffixes, shutdown_executor
+from .collector import (
+    normalize_collection_suffixes,
+    queue_date,
+    queue_file,
+    queue_latest,
+    queue_west_suffixes,
+    shutdown_executor,
+)
 from .crypto import decrypt_cookie, encrypt_cookie
 from .query_service import query_manager
 from .monitor_service import monitor_manager
@@ -26,7 +33,7 @@ from .sources.registry import create_adapter
 
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_PATTERN = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-_suffix_cache: tuple[float, list[dict[str, Any]]] | None = None
+_suffix_cache: tuple[float, int, list[dict[str, Any]]] | None = None
 _SUFFIX_CACHE_TTL = 300.0
 
 
@@ -200,6 +207,7 @@ class CollectPayload(BaseModel):
     source_id: int = Field(gt=0)
     requested_date: str
     file_format: Literal["txt", "csv"] = "txt"
+    suffixes: list[str] = Field(default_factory=list, max_length=100)
 
     @field_validator("requested_date")
     @classmethod
@@ -220,6 +228,14 @@ class SchedulePayload(BaseModel):
     run_time: str
     suffixes: list[str] = Field(default_factory=list, max_length=100)
     enabled: bool = True
+
+    @field_validator("suffixes")
+    @classmethod
+    def validate_suffixes(cls, values: list[str]) -> list[str]:
+        try:
+            return normalize_collection_suffixes(values)
+        except SourceError as exc:
+            raise ValueError(str(exc)) from exc
 
     @field_validator("run_time")
     @classmethod
@@ -993,16 +1009,22 @@ def clear_registered_domains() -> dict[str, Any]:
 def collect(payload: CollectPayload) -> dict[str, Any]:
     ensure_date(payload.requested_date)
     try:
-        run_id = queue_date(payload.source_id, payload.requested_date, payload.file_format, "manual")
+        run_id = queue_date(
+            payload.source_id, payload.requested_date, payload.file_format, "manual", suffixes=payload.suffixes
+        )
     except SourceError as exc:
         raise fail(str(exc), 422) from exc
     return ok({"run_id": run_id})
 
 
 @app.post("/api/collect/latest")
-def collect_latest(source_id: int = Query(gt=0), file_format: Literal["txt", "csv"] = "txt") -> dict[str, Any]:
+def collect_latest(
+    source_id: int = Query(gt=0),
+    file_format: Literal["txt", "csv"] = "txt",
+    suffixes: list[str] = Query(default=[], max_length=100),
+) -> dict[str, Any]:
     try:
-        run_id = queue_latest(source_id, file_format, "manual-latest")
+        run_id = queue_latest(source_id, file_format, "manual-latest", suffixes=suffixes)
     except SourceError as exc:
         raise fail(str(exc), 422) from exc
     return ok({"run_id": run_id})
@@ -1022,6 +1044,7 @@ async def collect_upload(
     source_id: int = Query(gt=0),
     requested_date: str = Query(...),
     file: UploadFile = File(...),
+    suffixes: list[str] = Query(default=[], max_length=100),
 ) -> dict[str, Any]:
     ensure_date(requested_date)
     filename = file.filename or "upload.txt"
@@ -1031,7 +1054,7 @@ async def collect_upload(
     if len(content) > 50 * 1024 * 1024:
         raise fail("TXT 文件不能超过 50 MB", 422)
     try:
-        run_id = queue_file(source_id, requested_date, content, filename)
+        run_id = queue_file(source_id, requested_date, content, filename, suffixes=suffixes)
     except SourceError as exc:
         raise fail(str(exc), 422) from exc
     return ok({"run_id": run_id})
@@ -1248,29 +1271,35 @@ def import_generated_domains(payload: GeneratedDomainsPayload) -> dict[str, Any]
 def list_domain_suffixes() -> dict[str, Any]:
     global _suffix_cache
     cached_at = time.monotonic()
-    if _suffix_cache and cached_at - _suffix_cache[0] < _SUFFIX_CACHE_TTL:
-        return ok(_suffix_cache[1])
+    revision = db.domain_revision
+    if _suffix_cache and cached_at - _suffix_cache[0] < _SUFFIX_CACHE_TTL and _suffix_cache[1] == revision:
+        return ok(_suffix_cache[2])
     rows = db.fetch_all(
         """
         SELECT suffix, COUNT(*) AS count
         FROM domains
+        WHERE suffix != ''
         GROUP BY suffix
         ORDER BY suffix
         """
     )
     for row in rows:
         suffix = row["suffix"]
-        if any(ord(char) > 127 for char in suffix):
+        try:
+            readable_suffix = suffix.encode("ascii").decode("idna")
+        except UnicodeError:
+            readable_suffix = suffix
+        if any(db._is_chinese(char) for char in readable_suffix):
             row["group"] = "chinese"
-        elif len(suffix) == 2:
+        elif len(readable_suffix) == 2:
             row["group"] = "two"
-        elif len(suffix) == 3:
+        elif len(readable_suffix) == 3:
             row["group"] = "three"
-        elif len(suffix) == 4:
+        elif len(readable_suffix) == 4:
             row["group"] = "four"
         else:
             row["group"] = "other"
-    _suffix_cache = (cached_at, rows)
+    _suffix_cache = (cached_at, revision, rows)
     return ok(rows)
 
 
@@ -1716,7 +1745,7 @@ def run_schedule(schedule_id: int) -> dict[str, Any]:
         if source.get("adapter") == "west_cn":
             run_ids = queue_west_suffixes(schedule["source_id"], suffixes, today, "manual-schedule")
             return ok({"run_id": run_ids[0], "run_ids": run_ids})
-        run_id = queue_latest(schedule["source_id"], "txt", "manual-schedule")
+        run_id = queue_latest(schedule["source_id"], "txt", "manual-schedule", suffixes=suffixes)
     except SourceError as exc:
         raise fail(str(exc), 422) from exc
     return ok({"run_id": run_id})

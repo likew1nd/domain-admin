@@ -26,6 +26,30 @@ def _safe_filename(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", value)[:180]
 
 
+def normalize_collection_suffixes(suffixes: list[str] | None) -> list[str]:
+    if suffixes is None:
+        return []
+    if not isinstance(suffixes, list) or len(suffixes) > 100:
+        raise SourceError("域名后缀最多支持 100 个")
+    normalized: list[str] = []
+    for value in suffixes:
+        suffix = str(value).strip().lower()
+        if not suffix:
+            continue
+        try:
+            suffix = suffix.lstrip(".").encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise SourceError("域名后缀格式不正确") from exc
+        if len(suffix) > 253 or not re.fullmatch(
+            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*",
+            suffix,
+        ):
+            raise SourceError("域名后缀格式不正确")
+        if suffix not in normalized:
+            normalized.append(suffix)
+    return normalized
+
+
 def _get_source(source_id: int) -> dict[str, Any]:
     source = db.fetch_one("SELECT * FROM sources WHERE id = ? AND deleted_at = ''", (source_id,))
     if source is None:
@@ -52,7 +76,9 @@ def _update_run(run_id: int, **values: Any) -> None:
     db.execute(f"UPDATE import_runs SET {assignments} WHERE id = ?", (*values.values(), run_id))
 
 
-def _run_date(run_id: int, source: dict[str, Any], requested_date: str, file_format: str) -> None:
+def _run_date(
+    run_id: int, source: dict[str, Any], requested_date: str, file_format: str, suffixes: list[str] | None = None
+) -> None:
     adapter = None
     try:
         cookie = decrypt_cookie(source["cookie_ciphertext"])
@@ -66,6 +92,7 @@ def _run_date(run_id: int, source: dict[str, Any], requested_date: str, file_for
             downloaded.content,
             downloaded.filename,
             source.get("parser", "line"),
+            suffixes=suffixes,
         )
     except Exception as exc:  # the run is recorded so the UI can show the source error
         _update_run(run_id, status="failure", error=str(exc), finished_at=db.utc_now())
@@ -83,6 +110,7 @@ def _run_content(
     filename: str,
     parser: str = "line",
     persist_prefix: str = "",
+    suffixes: list[str] | None = None,
 ) -> None:
     try:
         domains = parse_domains(content, file_format, parser)
@@ -92,6 +120,12 @@ def _run_content(
         folder.mkdir(parents=True, exist_ok=True)
         stored_name = f"{persist_prefix}{_safe_filename(filename)}" if persist_prefix else _safe_filename(filename)
         (folder / stored_name).write_bytes(content)
+        if suffixes:
+            endings = tuple(f".{suffix}" for suffix in suffixes)
+            domains = {
+                domain for domain in domains
+                if (domain if domain.isascii() else domain.encode("idna").decode("ascii")).endswith(endings)
+            }
         inserted, updated = db.upsert_domains(source, requested_date, domains)
         _update_run(
             run_id,
@@ -107,7 +141,9 @@ def _run_content(
         _update_run(run_id, status="failure", error=str(exc), finished_at=db.utc_now())
 
 
-def _run_latest(run_id: int, source: dict[str, Any], file_format: str) -> None:
+def _run_latest(
+    run_id: int, source: dict[str, Any], file_format: str, suffixes: list[str] | None = None
+) -> None:
     adapter = None
     try:
         cookie = decrypt_cookie(source["cookie_ciphertext"])
@@ -116,7 +152,7 @@ def _run_latest(run_id: int, source: dict[str, Any], file_format: str) -> None:
         if not dates:
             raise SourceError("源站没有返回可下载日期")
         requested_date = dates[0]
-        _run_date(run_id, source, requested_date, file_format)
+        _run_date(run_id, source, requested_date, file_format, suffixes)
     except Exception as exc:
         _update_run(run_id, status="failure", error=str(exc), finished_at=db.utc_now())
     finally:
@@ -162,23 +198,36 @@ def _run_west_suffixes(
         _run_west_suffix(run_id, source, requested_date, suffix)
 
 
-def queue_date(source_id: int, requested_date: str, file_format: str = "txt", trigger_type: str = "manual") -> int:
+def queue_date(
+    source_id: int,
+    requested_date: str,
+    file_format: str = "txt",
+    trigger_type: str = "manual",
+    suffixes: list[str] | None = None,
+) -> int:
     if requested_date > date.today().isoformat():
         raise SourceError("不能采集未来日期")
     if file_format not in {"txt", "csv"}:
         raise SourceError("文件格式只支持 TXT 或 CSV")
+    suffixes = normalize_collection_suffixes(suffixes)
     source = _get_source(source_id)
     run_id = _create_run(source, requested_date, file_format, trigger_type)
-    EXECUTOR.submit(_run_date, run_id, source, requested_date, file_format)
+    EXECUTOR.submit(_run_date, run_id, source, requested_date, file_format, suffixes)
     return run_id
 
 
-def queue_latest(source_id: int, file_format: str = "txt", trigger_type: str = "schedule") -> int:
+def queue_latest(
+    source_id: int,
+    file_format: str = "txt",
+    trigger_type: str = "schedule",
+    suffixes: list[str] | None = None,
+) -> int:
     if file_format not in {"txt", "csv"}:
         raise SourceError("文件格式只支持 TXT 或 CSV")
+    suffixes = normalize_collection_suffixes(suffixes)
     source = _get_source(source_id)
     run_id = _create_run(source, "latest", file_format, trigger_type)
-    EXECUTOR.submit(_run_latest, run_id, source, file_format)
+    EXECUTOR.submit(_run_latest, run_id, source, file_format, suffixes)
     return run_id
 
 
@@ -193,13 +242,9 @@ def queue_west_suffixes(
         raise SourceError("只有西部数码数据源支持按后缀采集")
     if not source.get("cookie_ciphertext"):
         raise SourceError("请先在西部数码数据源中配置登录 Cookie")
-    normalized = list(
-        dict.fromkeys(str(suffix).strip().lower().lstrip(".") for suffix in suffixes if str(suffix).strip())
-    )
+    normalized = normalize_collection_suffixes(suffixes)
     if not normalized:
         raise SourceError("请至少填写一个域名后缀")
-    if any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*", suffix) for suffix in normalized):
-        raise SourceError("域名后缀格式不正确")
     requested = requested_date or date.today().isoformat()
     run_ids: list[int] = []
     runs: list[tuple[int, str]] = []
@@ -219,9 +264,11 @@ def queue_file(
     content: bytes,
     filename: str,
     trigger_type: str = "manual-file",
+    suffixes: list[str] | None = None,
 ) -> int:
     if not content:
         raise SourceError("上传文件不能为空")
+    suffixes = normalize_collection_suffixes(suffixes)
     source = _get_source(source_id)
     run_id = _create_run(source, requested_date, "txt", trigger_type)
     safe_name = _safe_filename(filename or f"upload-{requested_date}.txt")
@@ -235,6 +282,7 @@ def queue_file(
         safe_name,
         "line",
         f"upload-{run_id}-",
+        suffixes,
     )
     return run_id
 

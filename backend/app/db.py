@@ -13,6 +13,8 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 DB_PATH = Path(os.getenv("DOMAIN_DB_PATH", str(BASE_DIR / "data" / "domains.db")))
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 _db_lock = threading.RLock()
+# 后缀统计只随域名集合变化；导入、删除提交后让接口缓存立即失效。
+domain_revision = 0
 
 
 def utc_now() -> str:
@@ -93,6 +95,7 @@ def get_connection() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    global domain_revision
     with _db_lock, get_connection() as connection:
         has_registered_table = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registered_domains'"
@@ -390,7 +393,7 @@ def init_db() -> None:
             UPDATE domains
             SET suffix = lower(substr(domain, length(domain) - instr(reverse(domain), '.') + 2)),
                 label_length = length(substr(domain, 1, length(domain) - instr(reverse(domain), '.')))
-            WHERE label_length = 0
+            WHERE label_length = 0 OR suffix = ''
             """
         )
         # 覆盖查询任务预览常用的筛选列，统计数量时无需回表
@@ -500,6 +503,8 @@ def init_db() -> None:
                 ORDER BY a.id
                 """
             )
+        connection.commit()
+        domain_revision += 1
 
 
 def fetch_all(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -522,6 +527,7 @@ def execute(sql: str, params: tuple[Any, ...] = ()) -> int:
 def delete_domains(
     where: str, params: tuple[Any, ...], joins: str, domains: list[str] | None = None
 ) -> int:
+    global domain_revision
     if domains is not None and not domains:
         raise ValueError("请选择要删除的域名")
     with _db_lock, get_connection() as connection:
@@ -559,6 +565,9 @@ def delete_domains(
         deleted = connection.execute(f"DELETE FROM domains{clause}").rowcount
         if not clear_all:
             connection.execute("DROP TABLE domain_delete_targets")
+        connection.commit()
+        if deleted:
+            domain_revision += 1
         return deleted
 
 
@@ -595,6 +604,7 @@ def soft_delete_source(source_id: int) -> int:
 def upsert_domains(
     source: dict[str, Any], requested_date: str, domains: set[str]
 ) -> tuple[int, int]:
+    global domain_revision
     inserted = 0
     updated = 0
     imported_at = utc_now()
@@ -661,6 +671,8 @@ def upsert_domains(
                 updated += 1
 
         connection.commit()
+        if inserted:
+            domain_revision += 1
 
     return inserted, updated
 

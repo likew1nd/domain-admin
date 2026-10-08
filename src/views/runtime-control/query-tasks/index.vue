@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onActivated, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import {
   type CreateQueryTaskPayload,
   type DomainSuffix,
@@ -22,6 +22,8 @@ import { $t } from '@/locales';
 import { compositionOptions } from '@/components/domain-filter';
 
 const suffixes = ref<DomainSuffix[]>([]);
+const suffixesLoading = ref(false);
+const suffixesError = ref('');
 const suffixGroupTab = ref<'all' | DomainSuffix['group']>('all');
 const tasks = ref<QueryTask[]>([]);
 const logs = ref<QueryLog[]>([]);
@@ -485,21 +487,24 @@ async function preview() {
   }
 }
 
-async function loadData(options: { silent?: boolean } = {}) {
+async function loadSuffixes() {
+  if (suffixesLoading.value) return;
+  suffixesLoading.value = true;
+  suffixesError.value = '';
+  try {
+    suffixes.value = await fetchDomainSuffixes();
+  } catch (error) {
+    suffixesError.value = `后缀加载失败：${error instanceof Error ? error.message : '请求失败'}，请点击刷新后缀重试。`;
+  } finally {
+    suffixesLoading.value = false;
+  }
+}
+
+async function loadData() {
   if (dataRequestPending.value) return;
   dataRequestPending.value = true;
   try {
-    if (options.silent) {
-      tasks.value = await fetchQueryTasks();
-    } else {
-      // 后缀统计可能需要扫描大量历史数据，放到后台加载，避免阻塞任务状态首屏。
-      fetchDomainSuffixes()
-        .then(data => {
-          suffixes.value = data;
-        })
-        .catch(() => undefined);
-      tasks.value = await fetchQueryTasks();
-    }
+    tasks.value = await fetchQueryTasks();
     // 预览数量也不应阻塞首屏，完成后仅更新右上角计数。
     if (previewTotal.value === null && !previewLoading.value) preview();
   } catch (error) {
@@ -652,17 +657,20 @@ watch(activeView, async value => {
   scrollLogsToLatest();
 });
 
-const refreshTimer = setInterval(() => loadData({ silent: true }), 3000);
+const refreshTimer = setInterval(loadData, 3000);
 const logRefreshTimer = setInterval(() => {
   if (activeView.value === 'logs') loadLogs();
 }, 1000);
 async function initialize() {
+  // 后缀独立加载，避免保存配置慢或任务轮询在途时跳过唯一的初次请求。
+  loadSuffixes();
   loadInterceptKeyStatus();
   await loadSavedSettings();
   await loadData();
   await loadLogs();
 }
 initialize();
+onActivated(loadSuffixes);
 onBeforeUnmount(() => {
   clearInterval(refreshTimer);
   clearInterval(logRefreshTimer);
@@ -896,7 +904,24 @@ onBeforeUnmount(() => {
                         <span>{{ $t('page.runtime.queryTasks.suffixes') }}</span>
                       </template>
                       <div class="w-full">
-                        <ElTabs v-model="suffixGroupTab" type="border-card">
+                        <div class="mb-8px flex items-center justify-between gap-8px">
+                          <span class="text-12px text-gray-500">括号内为当前数据库中的域名数量</span>
+                          <ElButton text size="small" :loading="suffixesLoading" @click="loadSuffixes">
+                            刷新后缀
+                          </ElButton>
+                        </div>
+                        <ElAlert
+                          v-if="suffixesError"
+                          class="mb-8px"
+                          :title="suffixesError"
+                          type="error"
+                          :closable="false"
+                          show-icon
+                        />
+                        <p v-else-if="!suffixesLoading && !suffixes.length" class="mb-8px text-13px text-gray-500">
+                          暂无后缀数据，请先采集或导入域名。
+                        </p>
+                        <ElTabs v-model="suffixGroupTab" v-loading="suffixesLoading" type="border-card">
                           <ElTabPane name="all" :label="$t('page.runtime.queryTasks.all')">
                             <div class="mb-8px flex gap-8px">
                               <ElButton size="small" @click="selectAllSuffixes('all')">
