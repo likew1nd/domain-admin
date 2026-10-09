@@ -177,6 +177,7 @@ class MonitorManager:
             LEFT JOIN monitor_domain_state m ON m.domain = c.domain
             WHERE c.result = 'qualified'
               AND (m.status IS NULL OR m.status = 'monitoring' OR m.status = 'available')
+              AND NOT EXISTS (SELECT 1 FROM registered_domains r WHERE r.domain = c.domain)
             ORDER BY c.checked_at ASC, c.domain
             """
         )
@@ -340,7 +341,8 @@ class MonitorManager:
             self._log(
                 "info" if result.success else "warning",
                 "register",
-                f"{config['name']}：{'提交成功' if result.success else '提交失败'}（HTTP {result.status_code}）",
+                f"{config['name']}：{'提交成功' if result.success else '提交失败'}（HTTP {result.status_code}）"
+                + (f"：{result.reason}" if not result.success and result.reason else ""),
                 domain,
                 result.response,
             )

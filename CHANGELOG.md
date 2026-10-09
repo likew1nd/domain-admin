@@ -1,5 +1,19 @@
 # Changelog
 
+## [v2.0.4](https://github.com/likew1nd/domain-admin/compare/v2.0.3...v2.0.4) (2026-10-09)
+
+### Features
+
+- Select qualified domains and move them to the kicked list with confirmation, retaining query snapshots and excluding them from monitoring.
+- Add selected expired domains to the qualified list while skipping registered domains.
+
+### Fixes and improvements
+
+- Fix Dynadot registration header casing and required privacy/duration parameters; default to one year and full privacy while preserving custom settings.
+- Show registration business errors and exclude registered domains from qualified results, counts and monitor candidates.
+- Preserve WHOIS, RDAP and APIHZ timestamp precision, convert timezone-aware values to Beijing time, and include the end date in date filters.
+- Add regression coverage for registration, qualification, batch kick rollback and domain dates.
+
 ## [v2.0.3](https://github.com/likew1nd/domain-admin/compare/v2.0.2...v2.0.3) (2026-10-08)
 
 ### Fixes and improvements

@@ -183,7 +183,7 @@ class SelectedDomainsPayload(BaseModel):
     @classmethod
     def validate_domains(cls, values: list[str]) -> list[str]:
         if any(not value.strip() for value in values):
-            raise ValueError("请选择要删除的域名")
+            raise ValueError("请选择要操作的域名")
         return list(dict.fromkeys(value.strip().lower() for value in values))
 
 
@@ -847,11 +847,11 @@ def list_kicked_domains(
                               ("k.kicked_at", kicked_start, kicked_end)):
         if start:
             ensure_date_format(start)
-            conditions.append(f"substr({field}, 1, 10) >= ?" if field == "k.kicked_at" else f"{field} >= ?")
+            conditions.append(f"substr({field}, 1, 10) >= ?")
             params.append(start)
         if end:
             ensure_date_format(end)
-            conditions.append(f"substr({field}, 1, 10) <= ?" if field == "k.kicked_at" else f"{field} <= ?")
+            conditions.append(f"substr({field}, 1, 10) <= ?")
             params.append(end)
     where = " AND ".join(conditions)
     total = db.fetch_one(
@@ -1151,14 +1151,13 @@ def domain_list_condition(filters: DomainListFilters) -> tuple[str, list[Any], s
     for field, start, end in (("c.creation_date", filters.registration_start, filters.registration_end),
                               ("c.expiration_date", filters.expiration_start, filters.expiration_end),
                               ("COALESCE(NULLIF(d.query_time, ''), c.checked_at, '')", filters.query_start, filters.query_end)):
-        is_query_time = "query_time" in field
         if start:
             ensure_date_format(start)
-            conditions.append(f"substr({field}, 1, 10) >= ?" if is_query_time else f"{field} >= ?")
+            conditions.append(f"substr({field}, 1, 10) >= ?")
             params.append(start)
         if end:
             ensure_date_format(end)
-            conditions.append(f"substr({field}, 1, 10) <= ?" if is_query_time else f"{field} <= ?")
+            conditions.append(f"substr({field}, 1, 10) <= ?")
             params.append(end)
 
     where = " AND ".join(conditions)
@@ -1243,9 +1242,29 @@ def delete_selected_domains(payload: SelectedDomainsPayload) -> dict[str, Any]:
     return delete_domain_records(domains=payload.domains)
 
 
+@app.post("/api/domains/qualify-selected")
+def qualify_selected_domains(payload: SelectedDomainsPayload) -> dict[str, Any]:
+    try:
+        added = db.qualify_domains(payload.domains)
+    except RuntimeError as exc:
+        raise fail(str(exc), 409) from exc
+    dashboard.invalidate_stats()
+    return ok({"added": added, "skipped": len(payload.domains) - added})
+
+
 @app.post("/api/domains/delete-filtered")
 def delete_filtered_domains(payload: DomainListFilters) -> dict[str, Any]:
     return delete_domain_records(filters=payload)
+
+
+@app.post("/api/query-results/kick-selected")
+def kick_selected_query_results(payload: SelectedDomainsPayload) -> dict[str, Any]:
+    try:
+        kicked = db.kick_domains(payload.domains)
+    except RuntimeError as exc:
+        raise fail(str(exc), 409) from exc
+    dashboard.invalidate_stats()
+    return ok({"kicked": kicked, "skipped": len(payload.domains) - kicked})
 
 
 @app.post("/api/domains/generated")
@@ -1483,6 +1502,13 @@ def list_query_results(
 ) -> dict[str, Any]:
     conditions = ["c.result = ?"]
     params: list[Any] = [result]
+    if result == "qualified":
+        # Qualification is a query snapshot; registration is tracked separately.
+        # Apply to records, totals and facets, including existing registrations.
+        conditions.extend([
+            "NOT EXISTS (SELECT 1 FROM registered_domains r WHERE r.domain = c.domain)",
+            "NOT EXISTS (SELECT 1 FROM monitor_domain_state ms WHERE ms.domain = c.domain AND ms.status = 'registered')",
+        ])
     if domain:
         conditions.append("c.domain LIKE ?")
         params.append(f"%{domain.strip()}%")
@@ -1536,7 +1562,7 @@ def list_query_results(
     ):
         if value:
             ensure_date_format(value)
-            conditions.append(f"c.{field} {operator} ?")
+            conditions.append(f"substr(c.{field}, 1, 10) {operator} ?")
             params.append(value)
     for field, operator, value in (
         ("d.joined_at", ">=", joined_start),

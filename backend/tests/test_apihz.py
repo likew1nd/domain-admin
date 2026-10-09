@@ -11,6 +11,15 @@ from app.query_service import QueryTaskManager
 
 
 class ApiHzClientTests(unittest.TestCase):
+    def test_whois_minute_precision_slashes_and_date_only(self):
+        payload = {'code': 200, 'whois': (
+            'Creation Date: 2020/01/01 17:27<br>'
+            'Expiration Date: 2027-01-01<br>Domain Status: ok'
+        )}
+        result = apihz_client._parse_whois('example.com', payload, '')
+        self.assertEqual(result['creation_date'], '2020-01-01T17:27:00')
+        self.assertEqual(result['expiration_date'], '2027-01-01')
+
     def test_lookup_parses_whois_html(self):
         payload = {
             "code": 200,
@@ -25,8 +34,8 @@ class ApiHzClientTests(unittest.TestCase):
             result = apihz_client.lookup("Example.COM", "123", "key")
 
         self.assertEqual(result["source"], "apihz")
-        self.assertEqual(result["expiration_date"], "2027-08-13")
-        self.assertEqual(result["creation_date"], "1995-08-14")
+        self.assertEqual(result["expiration_date"], "2027-08-13T12:00:00+08:00")
+        self.assertEqual(result["creation_date"], "1995-08-14T12:00:00+08:00")
         self.assertEqual(result["statuses"], ["clientDeleteProhibited"])
 
     def test_lookup_recognises_no_matching_record_as_available(self):
@@ -52,8 +61,8 @@ class ApiHzClientTests(unittest.TestCase):
         with patch("app.apihz_client._request", return_value=(payload, "raw")):
             result = apihz_client.lookup("015580.cn", "123", "key")
 
-        self.assertEqual(result["creation_date"], "2026-10-05")
-        self.assertEqual(result["expiration_date"], "2027-10-05")
+        self.assertEqual(result["creation_date"], "2026-10-05T17:27:22")
+        self.assertEqual(result["expiration_date"], "2027-10-05T17:27:22")
         self.assertEqual(result["statuses"], ["ok"])
 
     def test_lookup_reports_api_error(self):
@@ -112,8 +121,8 @@ class ApiHzClientTests(unittest.TestCase):
         with patch("app.apihz_client._request", return_value=(payload, "raw")):
             result = apihz_client.lookup("example.com", "123", "key")
 
-        self.assertEqual(result["expiration_date"], "2027-08-13")
-        self.assertEqual(result["creation_date"], "1995-08-14")
+        self.assertEqual(result["expiration_date"], "2027-08-13T12:00:00+08:00")
+        self.assertEqual(result["creation_date"], "1995-08-14T12:00:00+08:00")
         self.assertEqual(result["statuses"], ["client transfer prohibited"])
 
     def test_lookup_treats_whois_no_data_as_available(self):

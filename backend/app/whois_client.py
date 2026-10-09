@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -31,6 +31,7 @@ RDAP_BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json"
 RDAP_BOOTSTRAP_TTL = 24 * 60 * 60
 RDAP_BOOTSTRAP_RETRY_DELAY = 60
 RDAP_TIMEOUT_SECONDS = 10
+DOMAIN_TIMEZONE = timezone(timedelta(hours=8))
 
 
 class RdapError(RuntimeError):
@@ -150,7 +151,7 @@ def _rdap_urls(domain: str, proxy: str | None) -> tuple[str, list[str]]:
 
 def _rdap_result(domain: str, payload: dict[str, Any], raw: str) -> dict[str, Any]:
     events = payload.get("events") or []
-    dates: dict[str, date] = {}
+    dates: dict[str, date | datetime] = {}
     for event in events:
         if not isinstance(event, dict):
             continue
@@ -192,9 +193,10 @@ def _lookup_rdap(domain: str, proxy: str | None = None) -> dict[str, Any]:
     raise last_error or RdapError("RDAP 查询失败")
 
 
-def _date_value(value: Any) -> date | None:
+def _date_value(value: Any) -> date | datetime | None:
+    """保留来源精度；有时区的时间转为北京时间，无时区的保留原始时间。"""
     if isinstance(value, datetime):
-        return value.date()
+        return value.astimezone(DOMAIN_TIMEZONE) if value.tzinfo else value
     if isinstance(value, date):
         return value
     if isinstance(value, (list, tuple)):
@@ -203,15 +205,16 @@ def _date_value(value: Any) -> date | None:
             if parsed:
                 return parsed
     if isinstance(value, str):
-        text = value.strip().replace("Z", "+00:00")
-        for parser in (datetime.fromisoformat,):
+        text = value.strip().replace("Z", "+00:00").replace("/", "-")
+        for parser in (date.fromisoformat, datetime.fromisoformat):
             try:
-                return parser(text).date()
+                return _date_value(parser(text))
             except ValueError:
                 pass
-        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%b-%Y"):
+        for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y %H:%M", "%d-%b-%Y"):
             try:
-                return datetime.strptime(text[:10], fmt).date()
+                parsed = datetime.strptime(text, fmt)
+                return parsed if "%H" in fmt else parsed.date()
             except ValueError:
                 pass
     return None
@@ -252,7 +255,7 @@ def deletion_status(info: dict[str, Any]) -> str:
     if not expiration_text:
         return ""
     try:
-        return "已过期" if date.fromisoformat(expiration_text) <= date.today() else "未过期"
+        return "已过期" if date.fromisoformat(expiration_text[:10]) <= datetime.now(DOMAIN_TIMEZONE).date() else "未过期"
     except ValueError:
         return ""
 
@@ -318,11 +321,11 @@ def match_filters(info: dict[str, Any], filters: dict[str, Any]) -> tuple[bool, 
     expiration_text = info.get("expiration_date", "")
     creation_text = info.get("creation_date", "")
     try:
-        expiration = date.fromisoformat(expiration_text) if expiration_text else None
+        expiration = date.fromisoformat(expiration_text[:10]) if expiration_text else None
     except ValueError:
         expiration = None
     try:
-        creation = date.fromisoformat(creation_text) if creation_text else None
+        creation = date.fromisoformat(creation_text[:10]) if creation_text else None
     except ValueError:
         creation = None
 

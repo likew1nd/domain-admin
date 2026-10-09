@@ -28,6 +28,7 @@ class RegisterResult:
     success: bool
     status_code: int
     response: str
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -264,15 +265,36 @@ class DynadotRegistrar(RegistrarAdapter):
 
         return not has_error(payload)
 
+    @staticmethod
+    def _failure_reason(response: str) -> str:
+        try:
+            payload = json.loads(response)
+        except json.JSONDecodeError:
+            return "接口未返回有效 JSON，详见响应详情"
+        if not isinstance(payload, dict):
+            return "接口响应格式异常，详见响应详情"
+        code = payload.get("code", payload.get("Code"))
+        error = payload.get("error", payload.get("Error"))
+        if isinstance(error, dict):
+            error = error.get("description") or error.get("Description") or error.get("message") or error.get("Message")
+        message = error or payload.get("message") or payload.get("Message") or "详见响应详情"
+        prefix = f"业务码 {code}：" if code is not None else ""
+        return (prefix + " ".join(str(message).split()))[:500]
+
     def register(self, domain: str) -> RegisterResult:
         config = self._config()
         payload = config.get("payload") if isinstance(config.get("payload"), dict) else {}
         payload = dict(payload)
-        payload.setdefault("domain", config.get("domain", {}))
+        domain_config = payload.get("domain", config.get("domain", {}))
+        if not isinstance(domain_config, dict):
+            raise RegistrarError("Dynadot 注册参数 domain 必须是 JSON 对象")
+        # RESTful v2 requires both fields inside domain, even with account defaults.
+        payload["domain"] = {"duration": 1, "privacy": "full", **domain_config}
         if config.get("currency") not in (None, ""):
             payload.setdefault("currency", config["currency"])
         status_code, response = self._request("POST", f"/restful/v2/domains/{quote(domain, safe='')}/register", payload)
-        return RegisterResult(self._success(status_code, response), status_code, response)
+        success = self._success(status_code, response)
+        return RegisterResult(success, status_code, response, "" if success else self._failure_reason(response))
 
     def check_available(self, domain: str) -> AvailabilityResult:
         status_code, response = self._request("GET", f"/restful/v2/domains/{quote(domain, safe='')}/search")
@@ -472,9 +494,9 @@ def _retry_after_seconds(value: str | None) -> float:
 
 
 def _send_dynadot(request: Request) -> tuple[int, str]:
-    # urllib normalizes ``X-Request-ID`` to ``X-request-id``. Dynadot's
-    # gateway treats that header name as case-sensitive, so use http.client
-    # only for Dynadot and leave other adapters on urllib.
+    # urllib changes header casing (including Content-Type to Content-type).
+    # Dynadot's gateway requires canonical spelling despite HTTP header names
+    # being case-insensitive. Restore it before sending through http.client.
     parsed = urlsplit(request.full_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise RegistrarError("注册商 API 地址必须以 http:// 或 https:// 开头")
@@ -502,6 +524,8 @@ def _send_dynadot(request: Request) -> tuple[int, str]:
                     key = "X-Request-ID"
                 elif normalized == "x-signature":
                     key = "X-Signature"
+                elif normalized == "content-type":
+                    key = "Content-Type"
                 headers[key] = value
             connection.request(request.get_method(), path, body=request.data, headers=headers)
             response = connection.getresponse()

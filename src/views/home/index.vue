@@ -14,7 +14,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { useThemeStore } from '@/store/modules/theme';
 import type { ECOption } from '@/hooks/common/echarts';
 import { useRouterPush } from '@/hooks/common/router';
-import { formatDateTime } from '@/utils/common';
+import { formatDateTime, formatDomainDateTime } from '@/utils/common';
 import DomainStatusTag from '@/components/domain-status-tag.vue';
 import DashChart from './modules/dash-chart.vue';
 import QuickEntry, { type EntryItem } from './modules/quick-entry.vue';
@@ -797,7 +797,9 @@ const riskList = computed(() => {
             </template>
             <ElTable :data="checks?.latestQualified || []" size="small" empty-text="暂无符合条件的域名">
               <ElTableColumn prop="domain" label="域名" min-width="150" show-overflow-tooltip />
-              <ElTableColumn prop="expiration_date" label="到期时间" width="105" />
+              <ElTableColumn prop="expiration_date" label="到期时间" width="190">
+                <template #default="{ row }">{{ formatDomainDateTime(row.expiration_date) }}</template>
+              </ElTableColumn>
               <ElTableColumn prop="deletion_status" label="删除状态" width="90">
                 <template #default="{ row }"><DomainStatusTag kind="deletion" :value="row.deletion_status" /></template>
               </ElTableColumn>

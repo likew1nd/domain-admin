@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import monitor_service
-from app.registrar_adapters import AvailabilityResult, RegistrarError
+from app.registrar_adapters import AvailabilityResult, DynadotRegistrar, RegistrarError
 
 
 class MonitorServiceTests(unittest.TestCase):
@@ -65,6 +65,23 @@ class MonitorServiceTests(unittest.TestCase):
         self.log.assert_called_with("info", "whois", "当前状态：待删除", "example.test")
         self.register.assert_not_called()
         self.kick.assert_not_called()
+
+    def test_registration_failure_log_shows_dynadot_business_error(self):
+        adapter = DynadotRegistrar({}, "test-key:test-secret")
+        description = "Unsupported content-type in the header. The Content-Type header must be set to 'application/json'."
+        response = monitor_service.json.dumps({"code": 400, "message": "Bad Request", "error": {"description": description}})
+        with (
+            patch.object(monitor_service, "create_adapter", return_value=adapter),
+            patch.object(adapter, "_request", return_value=(200, response)),
+            patch.object(self.manager, "_record_registered") as record,
+        ):
+            self.assertFalse(self.manager._register_one("ip3t.com", {"id": 8, "name": "123"}))
+        record.assert_not_called()
+        message = self.log.call_args.args[2]
+        self.assertIn("HTTP 200", message)
+        self.assertIn("400", message)
+        self.assertIn(description, message)
+        self.assertEqual(self.log.call_args.args[4], response)
 
 
 if __name__ == "__main__":

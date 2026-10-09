@@ -7,7 +7,7 @@ import {
   clearKickedDomains,
   fetchKickedDomains
 } from '@/service/api';
-import { formatDateTime } from '@/utils/common';
+import { formatDateTime, formatDomainDateTime } from '@/utils/common';
 import DomainStatusTag from '@/components/domain-status-tag.vue';
 import DomainFilterPanel from '@/components/domain-filter-panel.vue';
 import DomainStatsCards from '@/components/domain-stats-cards.vue';
@@ -155,8 +155,12 @@ onMounted(() => loadData(true));
           <ElTableColumn v-if="hasColumn('deletion_status')" prop="deletion_status" label="删除状态" width="100">
             <template #default="{ row }"><DomainStatusTag kind="deletion" :value="row.deletion_status" /></template>
           </ElTableColumn>
-          <ElTableColumn v-if="hasColumn('creation_date')" prop="creation_date" label="注册时间" width="125" />
-          <ElTableColumn v-if="hasColumn('expiration_date')" prop="expiration_date" label="到期时间" width="125" />
+          <ElTableColumn v-if="hasColumn('creation_date')" prop="creation_date" label="注册时间" width="190">
+            <template #default="{ row }">{{ formatDomainDateTime(row.creation_date) }}</template>
+          </ElTableColumn>
+          <ElTableColumn v-if="hasColumn('expiration_date')" prop="expiration_date" label="到期时间" width="190">
+            <template #default="{ row }">{{ formatDomainDateTime(row.expiration_date) }}</template>
+          </ElTableColumn>
           <ElTableColumn v-if="hasColumn('wechat_status')" prop="wechat_status" label="微信" width="70">
             <template #default="{ row }"><DomainStatusTag kind="risk" :value="row.wechat_status" /></template>
           </ElTableColumn>

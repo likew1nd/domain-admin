@@ -524,6 +524,124 @@ def execute(sql: str, params: tuple[Any, ...] = ()) -> int:
         return int(cursor.lastrowid or 0)
 
 
+def qualify_domains(domains: list[str]) -> int:
+    with _db_lock, get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        # 查询中的结果会覆盖手动归类；沿用列表修改时的任务互斥规则。
+        if connection.execute(
+            "SELECT 1 FROM query_tasks WHERE status IN ('created', 'running') LIMIT 1"
+        ).fetchone():
+            raise RuntimeError("请先停止正在运行的查询任务，再加入符合列表")
+        targets: list[str] = []
+        for offset in range(0, len(domains), 500):
+            batch = domains[offset:offset + 500]
+            placeholders = ",".join("?" for _ in batch)
+            targets.extend(row["domain"] for row in connection.execute(
+                f"""
+                SELECT d.domain FROM domains d
+                LEFT JOIN domain_checks c ON c.domain = d.domain
+                LEFT JOIN monitor_domain_state m ON m.domain = d.domain
+                WHERE d.domain IN ({placeholders})
+                  AND (c.result IS NULL OR c.result != 'qualified' OR m.status = 'kicked')
+                  AND COALESCE(m.status, '') != 'registered'
+                  AND NOT EXISTS (SELECT 1 FROM registered_domains r WHERE r.domain = d.domain)
+                """, batch
+            ))
+        if not targets:
+            return 0
+        timestamp = utc_now()
+        # domain_checks 需要有效的任务外键；记录已完成的手动归类，不启动查询。
+        task_id = connection.execute(
+            """
+            INSERT INTO query_tasks (name, filters_json, proxy_json, status, continuous,
+                                     total_count, processed_count, qualified_count,
+                                     created_at, finished_at, updated_at)
+            VALUES ('手动加入符合列表', '{}', '{}', 'completed', 0, ?, ?, ?, ?, ?, ?)
+            """, (len(targets), len(targets), len(targets), timestamp, timestamp, timestamp)
+        ).lastrowid
+        connection.executemany(
+            """
+            INSERT INTO domain_checks (domain, task_id, result, reason, checked_at)
+            VALUES (?, ?, 'qualified', '手动加入符合列表', ?)
+            ON CONFLICT(domain) DO UPDATE SET
+                result = excluded.result, reason = excluded.reason
+            """, [(domain, task_id, timestamp) for domain in targets]
+        )
+        connection.executemany(
+            """
+            UPDATE domains SET query_time = COALESCE(
+                NULLIF((SELECT checked_at FROM domain_checks WHERE domain = domains.domain), ''), ?
+            ) WHERE domain = ? AND (query_time = '' OR query_time IS NULL)
+            """,
+            [(timestamp, domain) for domain in targets]
+        )
+        connection.executemany(
+            """
+            INSERT INTO monitor_domain_state (domain, status, updated_at) VALUES (?, 'monitoring', ?)
+            ON CONFLICT(domain) DO UPDATE SET
+                status = 'monitoring', last_error = '', updated_at = excluded.updated_at
+            """, [(domain, timestamp) for domain in targets]
+        )
+        return len(targets)
+
+
+def kick_domains(domains: list[str]) -> int:
+    with _db_lock, get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        if connection.execute(
+            "SELECT 1 FROM query_tasks WHERE status IN ('created', 'running') LIMIT 1"
+        ).fetchone():
+            raise RuntimeError("请先停止正在运行的查询任务，再批量踢出")
+        if connection.execute(
+            "SELECT 1 FROM monitor_state WHERE status IN ('running', 'stopping') LIMIT 1"
+        ).fetchone():
+            raise RuntimeError("请先停止正在运行的监控任务，再批量踢出")
+        timestamp = utc_now()
+        kicked = 0
+        for offset in range(0, len(domains), 500):
+            batch = domains[offset:offset + 500]
+            placeholders = ",".join("?" for _ in batch)
+            targets = [row["domain"] for row in connection.execute(
+                f"""
+                SELECT c.domain FROM domain_checks c
+                WHERE c.domain IN ({placeholders}) AND c.result = 'qualified'
+                  AND NOT EXISTS (SELECT 1 FROM registered_domains r WHERE r.domain = c.domain)
+                  AND NOT EXISTS (SELECT 1 FROM monitor_domain_state m
+                                  WHERE m.domain = c.domain AND m.status = 'registered')
+                """, batch
+            )]
+            if not targets:
+                continue
+            placeholders = ",".join("?" for _ in targets)
+            connection.execute(
+                f"""
+                INSERT OR REPLACE INTO kicked_domains (
+                    domain, reason, detail, source, kicked_at, deletion_status,
+                    creation_date, expiration_date, wechat_status, qq_status,
+                    pollution_status, blocked_status, blacklist_status, filing_nature, filing_info
+                )
+                SELECT domain, '手动批量踢出', '', 'manual', ?, deletion_status,
+                       creation_date, expiration_date, wechat_status, qq_status,
+                       pollution_status, blocked_status, blacklist_status, filing_nature, filing_info
+                FROM domain_checks WHERE domain IN ({placeholders})
+                """, [timestamp, *targets]
+            )
+            connection.execute(
+                f"UPDATE domain_checks SET result = 'kicked', reason = '手动批量踢出' WHERE domain IN ({placeholders})",
+                targets,
+            )
+            connection.executemany(
+                """
+                INSERT INTO monitor_domain_state (domain, status, last_error, updated_at)
+                VALUES (?, 'kicked', '手动批量踢出', ?)
+                ON CONFLICT(domain) DO UPDATE SET
+                    status = excluded.status, last_error = excluded.last_error, updated_at = excluded.updated_at
+                """, [(domain, timestamp) for domain in targets]
+            )
+            kicked += len(targets)
+        return kicked
+
+
 def delete_domains(
     where: str, params: tuple[Any, ...], joins: str, domains: list[str] | None = None
 ) -> int:

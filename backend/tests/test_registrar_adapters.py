@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import json
 import time
 import unittest
 import uuid
@@ -157,6 +158,76 @@ class RegistrarAdapterTests(unittest.TestCase):
             result = adapter.test()
         self.assertFalse(result[0])
 
+    def test_dynadot_registration_sends_canonical_content_type(self):
+        # Replay the gateway rejection saved for ip3t.com on 2026-10-09.
+        rejection = {
+            "code": 400,
+            "message": "Bad Request",
+            "error": {"description": "Unsupported content-type in the header. The Content-Type header must be set to 'application/json'."},
+        }
+        with patch.object(registrar_adapters.http.client, "HTTPSConnection") as connect:
+            connection = connect.return_value
+            response = connection.getresponse.return_value
+            response.status = 200
+            response.read.side_effect = lambda: json.dumps(
+                {"code": 200, "message": "Success"}
+                if connection.request.call_args.kwargs["headers"].get("Content-Type") == "application/json"
+                else rejection
+            ).encode()
+            result = DynadotRegistrar({"config": {"payload": {}, "currency": "USD"}}, "api-key:api-secret").register("ip3t.com")
+        self.assertTrue(result.success, result.response)
+        sent = connection.request.call_args
+        self.assertEqual(sent.args, ("POST", "/restful/v2/domains/ip3t.com/register"))
+        self.assertEqual(json.loads(sent.kwargs["body"]), {"domain": {"duration": 1, "privacy": "full"}, "currency": "USD"})
+
+    def test_dynadot_registration_supplies_required_domain_parameters(self):
+        adapter = DynadotRegistrar({"config_json": '{"payload":{},"currency":"USD"}'}, "api-key:api-secret")
+
+        def register_response(method, path, payload):
+            for field in ("privacy", "duration"):
+                if field not in payload.get("domain", {}):
+                    return 400, json.dumps({"code": 400, "message": f"The required parameter {field} is missing."})
+            self.assertEqual(payload["domain"], {"privacy": "full", "duration": 1})
+            return 200, '{"code":200,"message":"Success"}'
+
+        with patch.object(adapter, "_request", side_effect=register_response):
+            result = adapter.register("example.com")
+        self.assertTrue(result.success, result.reason)
+
+    def test_dynadot_registration_preserves_custom_domain_settings(self):
+        for source in ("payload", "domain"):
+            with self.subTest(source=source):
+                domain = {"duration": 2, "privacy": "off", "registrant_contact_id": 123}
+                config = {"payload": {"domain": domain, "currency": "EUR"}} if source == "payload" else {"domain": domain}
+                original = json.dumps(config)
+                adapter = DynadotRegistrar({"config": config}, "api-key:api-secret")
+                with patch.object(adapter, "_request", return_value=(200, '{"code":200}')) as request:
+                    self.assertTrue(adapter.register("example.com").success)
+                self.assertEqual(request.call_args.args[2]["domain"], domain)
+                if source == "payload":
+                    self.assertEqual(request.call_args.args[2]["currency"], "EUR")
+                self.assertEqual(json.dumps(config), original)
+
+    def test_dynadot_registration_adds_defaults_without_mutating_config(self):
+        for source in ("payload", "domain"):
+            with self.subTest(source=source):
+                domain = {"registrant_contact_id": 123}
+                config = {"payload": {"domain": domain}} if source == "payload" else {"domain": domain}
+                adapter = DynadotRegistrar({"config": config}, "api-key:api-secret")
+                with patch.object(adapter, "_request", return_value=(200, '{"code":200}')) as request:
+                    self.assertTrue(adapter.register("example.com").success)
+                self.assertEqual(request.call_args.args[2]["domain"], {"registrant_contact_id": 123, "duration": 1, "privacy": "full"})
+                self.assertEqual(domain, {"registrant_contact_id": 123})
+
+    def test_dynadot_registration_rejects_non_object_domain_locally(self):
+        for domain in (None, "example.com", []):
+            with self.subTest(domain=domain):
+                adapter = DynadotRegistrar({"config": {"payload": {"domain": domain}}}, "api-key:api-secret")
+                with patch.object(adapter, "_request") as request:
+                    with self.assertRaises(RegistrarError):
+                        adapter.register("example.com")
+                request.assert_not_called()
+
     def test_dynadot_test_accepts_success_with_http_200(self):
         adapter = DynadotRegistrar({}, "api-key:api-secret")
         with patch.object(adapter, "_request", return_value=(200, '{"code":200,"message":"Success","data":{}}') ):
@@ -218,6 +289,8 @@ class RegistrarAdapterTests(unittest.TestCase):
                 self.assertEqual(sent.args, (method, path))
                 self.assertEqual(sent.kwargs["body"], expected_body)
                 headers = sent.kwargs["headers"]
+                if expected_body is not None:
+                    self.assertEqual(headers.get("Content-Type"), "application/json")
                 request_id = headers["X-Request-ID"]
                 self.assertEqual(str(uuid.UUID(request_id)), request_id)
                 signed_bytes = f"api-key\n{path}\n{request_id}\n".encode() + (expected_body or b"")

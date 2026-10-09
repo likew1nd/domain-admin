@@ -275,6 +275,13 @@ export function deleteSelectedDomains(domains: string[]) {
   });
 }
 
+export function qualifySelectedDomains(domains: string[]) {
+  return domainRequest<{ added: number; skipped: number }>('/domains/qualify-selected', {
+    method: 'POST',
+    body: JSON.stringify({ domains })
+  });
+}
+
 export function deleteFilteredDomains(filters: Record<string, string>) {
   return domainRequest<{ deleted: number }>('/domains/delete-filtered', {
     method: 'POST',
@@ -401,6 +408,13 @@ export function fetchQueryLogs(taskId?: number, limit = 500) {
 
 export function clearQueryResults(result: 'qualified' | 'unqualified') {
   return domainRequest<{ deleted: number }>(`/query-results/${result}`, { method: 'DELETE' });
+}
+
+export function kickSelectedQueryResults(domains: string[]) {
+  return domainRequest<{ kicked: number; skipped: number }>('/query-results/kick-selected', {
+    method: 'POST',
+    body: JSON.stringify({ domains })
+  });
 }
 
 export interface RegistrarApi {

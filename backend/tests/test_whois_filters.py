@@ -14,6 +14,16 @@ from app.query_service import QueryTaskManager
 
 
 class WhoisFilterTests(unittest.TestCase):
+    def test_datetime_fields_keep_inclusive_calendar_date_filters(self):
+        info = {'creation_date': '2020-01-01T23:59:59+08:00',
+                'expiration_date': '2020-12-31T23:59:59+08:00', 'statuses': []}
+        filters = {'delete_type': 'expired', 'registration_start': '2020-01-01',
+                   'registration_end': '2020-01-01', 'expiration_start': '2020-12-31',
+                   'expiration_end': '2020-12-31'}
+        self.assertEqual(QueryTaskManager._deletion_status(info), '已过期')
+        self.assertTrue(match_filters(info, filters)[0])
+        self.assertFalse(match_filters(info, {**filters, 'registration_end': '2019-12-31'})[0])
+
     @patch("app.whois_client.whois.whois", side_effect=WhoisDomainNotFoundError('No match for "example.com"'))
     @patch("app.whois_client._lookup_rdap", side_effect=RdapError("RDAP unavailable"))
     def test_whois_not_found_is_available(self, _rdap, _whois):

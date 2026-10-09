@@ -9,9 +9,10 @@ import {
   deleteFilteredDomains,
   deleteSelectedDomains,
   fetchDomainPage,
+  qualifySelectedDomains,
   resetDomainQueryTime
 } from '@/service/api';
-import { formatDateTime } from '@/utils/common';
+import { formatDateTime, formatDomainDateTime } from '@/utils/common';
 import { $t } from '@/locales';
 import DomainStatusTag from '@/components/domain-status-tag.vue';
 import DomainFilterPanel from '@/components/domain-filter-panel.vue';
@@ -28,9 +29,10 @@ const dateFields: DateField[] = [
 const rows = ref<DomainRecord[]>([]);
 const loading = ref(false);
 const resetting = ref(false);
+const qualifying = ref(false);
 type DeleteScope = 'all' | 'selected' | 'filtered';
 const deleting = ref<DeleteScope | ''>('');
-const busy = computed(() => loading.value || resetting.value || Boolean(deleting.value));
+const busy = computed(() => loading.value || resetting.value || qualifying.value || Boolean(deleting.value));
 const selectedDomains = ref<string[]>([]);
 const total = ref(0);
 const stats = ref<DomainListStats | null>(null);
@@ -132,6 +134,23 @@ function handleSelectionChange(selection: DomainRecord[]) {
   selectedDomains.value = selection.map(row => row.domain);
 }
 
+async function handleQualifySelected() {
+  if (busy.value || !selectedDomains.value.length) return;
+  const domains = [...selectedDomains.value];
+  qualifying.value = true;
+  try {
+    const result = await qualifySelectedDomains(domains);
+    const message = `已加入符合列表 ${result.added} 个域名${result.skipped ? `，跳过 ${result.skipped} 个（已加入、已注册或不存在）` : ''}`;
+    if (result.added) window.$message?.success(`${message}，监控任务运行时将自动纳入监控`);
+    else window.$message?.info(message);
+    await loadDomains(true);
+  } catch (error) {
+    window.$message?.error(error instanceof Error ? error.message : '加入符合列表失败');
+  } finally {
+    qualifying.value = false;
+  }
+}
+
 async function handleDelete(scope: DeleteScope) {
   if (busy.value) return;
   if (scope === 'selected' && !selectedDomains.value.length) return;
@@ -231,15 +250,23 @@ loadDomains(true);
             <ElTag type="info">{{ $t('page.domain.expired.total', { total }) }}</ElTag>
           </div>
           <div class="flex flex-wrap items-center justify-end gap-8px">
-            <ElButton :disabled="Boolean(deleting) || resetting" @click="loadDomains(true)">
+            <ElButton :disabled="Boolean(deleting) || resetting || qualifying" @click="loadDomains(true)">
               <template #icon><icon-ic-round-refresh /></template>
               刷新
+            </ElButton>
+            <ElButton
+              type="success"
+              :loading="qualifying"
+              :disabled="!selectedDomains.length || busy"
+              @click="handleQualifySelected"
+            >
+              加入符合{{ selectedDomains.length ? `（${selectedDomains.length}）` : '' }}
             </ElButton>
             <ElButton
               type="warning"
               plain
               :loading="resetting"
-              :disabled="Boolean(deleting) || loading"
+              :disabled="Boolean(deleting) || loading || qualifying"
               @click="handleResetQueryTime"
             >
               重置数据
@@ -301,8 +328,12 @@ loadDomains(true);
           <ElTableColumn v-if="hasColumn('deletion_status')" prop="deletion_status" label="删除状态" width="100">
             <template #default="{ row }"><DomainStatusTag kind="deletion" :value="row.deletion_status" /></template>
           </ElTableColumn>
-          <ElTableColumn v-if="hasColumn('creation_date')" prop="creation_date" label="注册时间" width="125" />
-          <ElTableColumn v-if="hasColumn('expiration_date')" prop="expiration_date" label="到期时间" width="125" />
+          <ElTableColumn v-if="hasColumn('creation_date')" prop="creation_date" label="注册时间" width="190">
+            <template #default="{ row }">{{ formatDomainDateTime(row.creation_date) }}</template>
+          </ElTableColumn>
+          <ElTableColumn v-if="hasColumn('expiration_date')" prop="expiration_date" label="到期时间" width="190">
+            <template #default="{ row }">{{ formatDomainDateTime(row.expiration_date) }}</template>
+          </ElTableColumn>
           <ElTableColumn v-if="hasColumn('wechat_status')" prop="wechat_status" label="微信" width="70">
             <template #default="{ row }"><DomainStatusTag kind="risk" :value="row.wechat_status" /></template>
           </ElTableColumn>

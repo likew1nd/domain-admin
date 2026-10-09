@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue';
+import { ElMessageBox } from 'element-plus';
 import {
   type DomainListStats,
   type DomainStatKey,
   type QueryResult,
   clearQueryResults,
-  fetchQueryResults
+  fetchQueryResults,
+  kickSelectedQueryResults
 } from '@/service/api';
-import { formatDateTime } from '@/utils/common';
+import { formatDateTime, formatDomainDateTime } from '@/utils/common';
 import DomainStatusTag from './domain-status-tag.vue';
 import DomainFilterPanel from './domain-filter-panel.vue';
 import DomainStatsCards from './domain-stats-cards.vue';
@@ -28,6 +30,8 @@ const page = ref(1);
 const pageSize = ref(20);
 const loading = ref(false);
 const clearing = ref(false);
+const kicking = ref(false);
+const selectedDomains = ref<string[]>([]);
 const stats = ref<DomainListStats | null>(null);
 const statsLoading = ref(false);
 const filters = ref(createDomainFilter(dateFields));
@@ -47,6 +51,7 @@ async function loadData(showStatsLoading = false) {
       filters: toFilterParams(filters.value, dateFields)
     });
     rows.value = data.records;
+    selectedDomains.value = [];
     total.value = data.total;
     stats.value = data.stats || null;
   } catch (error) {
@@ -60,6 +65,38 @@ async function loadData(showStatsLoading = false) {
 function changePage(value: number) {
   page.value = value;
   loadData();
+}
+
+function handleSelectionChange(selection: QueryResult[]) {
+  selectedDomains.value = selection.map(row => row.domain);
+}
+
+async function kickSelected() {
+  if (props.result !== 'qualified' || loading.value || clearing.value || kicking.value || !selectedDomains.value.length)
+    return;
+  const domains = [...selectedDomains.value];
+  kicking.value = true;
+  try {
+    try {
+      await ElMessageBox.confirm(
+        `确认将已勾选的 ${domains.length} 个域名移入踢出列表？移入后将退出符合列表，不再参与监控抢注。`,
+        '批量踢出确认',
+        { confirmButtonText: '确认踢出', cancelButtonText: '取消', type: 'warning', closeOnClickModal: false }
+      );
+    } catch {
+      return;
+    }
+    const result = await kickSelectedQueryResults(domains);
+    const message = `已踢出 ${result.kicked} 个域名${result.skipped ? `，跳过 ${result.skipped} 个（已注册或已不在符合列表）` : ''}`;
+    if (result.kicked) window.$message?.success(message);
+    else window.$message?.info(message);
+    page.value = 1;
+    await loadData(true);
+  } catch (error) {
+    window.$message?.error(error instanceof Error ? error.message : '批量踢出失败');
+  } finally {
+    kicking.value = false;
+  }
 }
 
 function changePageSize(value: number) {
@@ -112,7 +149,9 @@ watch(
   () => loadData(true),
   { immediate: true }
 );
-const refreshTimer = setInterval(() => loadData(), 10_000);
+const refreshTimer = setInterval(() => {
+  if (!loading.value && !kicking.value && !selectedDomains.value.length) loadData();
+}, 10_000);
 onBeforeUnmount(() => clearInterval(refreshTimer));
 </script>
 
@@ -130,22 +169,43 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
             <ElTag type="info">{{ $t('page.domain.queryResults.total', { total }) }}</ElTag>
           </div>
           <div class="flex flex-wrap items-center justify-end gap-8px">
-            <ElButton :loading="loading" @click="loadData(true)">
+            <ElButton
+              v-if="result === 'qualified'"
+              type="warning"
+              :loading="kicking"
+              :disabled="!selectedDomains.length || loading || clearing || kicking"
+              @click="kickSelected"
+            >
+              批量踢出{{ selectedDomains.length ? `（${selectedDomains.length}）` : '' }}
+            </ElButton>
+            <ElButton :loading="loading" :disabled="kicking" @click="loadData(true)">
               <template #icon><icon-ic-round-refresh /></template>
               {{ $t('common.refresh') }}
             </ElButton>
-            <ElButton type="danger" plain :loading="clearing" @click="clearData">清空数据</ElButton>
+            <ElButton type="danger" plain :loading="clearing" :disabled="kicking" @click="clearData">清空数据</ElButton>
           </div>
         </div>
       </template>
       <div class="table-wrapper">
-        <ElTable v-loading="loading" height="100%" :data="rows" border row-key="domain">
+        <ElTable
+          v-loading="loading"
+          height="100%"
+          :data="rows"
+          border
+          row-key="domain"
+          @selection-change="handleSelectionChange"
+        >
+          <ElTableColumn v-if="result === 'qualified'" type="selection" width="48" fixed="left" />
           <ElTableColumn prop="domain" :label="$t('page.domain.queryResults.domain')" min-width="190" fixed="left" />
           <ElTableColumn prop="deletion_status" :label="$t('page.domain.queryResults.deletionStatus')" width="100">
             <template #default="{ row }"><DomainStatusTag kind="deletion" :value="row.deletion_status" /></template>
           </ElTableColumn>
-          <ElTableColumn prop="creation_date" :label="$t('page.domain.queryResults.creationDate')" width="130" />
-          <ElTableColumn prop="expiration_date" :label="$t('page.domain.queryResults.expirationDate')" width="130" />
+          <ElTableColumn prop="creation_date" :label="$t('page.domain.queryResults.creationDate')" width="190">
+            <template #default="{ row }">{{ formatDomainDateTime(row.creation_date) }}</template>
+          </ElTableColumn>
+          <ElTableColumn prop="expiration_date" :label="$t('page.domain.queryResults.expirationDate')" width="190">
+            <template #default="{ row }">{{ formatDomainDateTime(row.expiration_date) }}</template>
+          </ElTableColumn>
           <ElTableColumn prop="wechat_status" :label="$t('page.domain.queryResults.wechat')" width="70">
             <template #default="{ row }"><DomainStatusTag kind="risk" :value="row.wechat_status" /></template>
           </ElTableColumn>

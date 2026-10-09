@@ -71,3 +71,8 @@ export function formatDateTime(value?: string | null) {
   const time = [date.getHours(), date.getMinutes(), date.getSeconds()].map(n => String(n).padStart(2, '0'));
   return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()} ${time.join(':')}`;
 }
+
+/** WHOIS 时间由后端统一处理时区；仅返回日期的来源不补造零点。 */
+export function formatDomainDateTime(value?: string | null) {
+  return (value || '').replace('T', ' ').replace(/(?:Z|[+-]\d{2}:\d{2})$/, '');
+}

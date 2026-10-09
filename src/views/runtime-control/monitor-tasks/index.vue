@@ -127,8 +127,9 @@ const configGuides: Record<
       {
         key: 'payload',
         label: '注册请求体（可选）',
-        description: '需要自定义注册参数时填写 JSON 对象；至少按官方文档提供 domain 对象。',
-        example: '{"domain":{}}'
+        description:
+          '默认注册 1 年并启用完整隐私保护。自定义时在 domain 内填写 duration 和 privacy（off、partial、full），联系人 ID 等参数也放在 domain 内。',
+        example: '{"domain":{"duration":1,"privacy":"full"}}'
       },
       {
         key: 'currency',
@@ -369,7 +370,7 @@ function selectAdapter(value: RegistrarApiPayload['adapter']) {
   const templates: Record<RegistrarApiPayload['adapter'], string> = {
     aliyun_intl:
       '{\n  "register_action": "CreateOrder",\n  "check_action": "CheckDomain",\n  "SubscriptionType": "New",\n  "Period": 1,\n  "RegistrantProfileId": "填写注册人资料 ID"\n}',
-    dynadot: '{\n  "payload": {},\n  "currency": "USD"\n}',
+    dynadot: '{\n  "payload": {\n    "domain": { "duration": 1, "privacy": "full" }\n  },\n  "currency": "USD"\n}',
     gname: '{\n  "register_path": "/domain/reg",\n  "test_path": "/user/info",\n  "check_path": "/domain/check"\n}',
     godaddy:
       '{\n  "period": 1,\n  "renew_auto": false,\n  "privacy": true,\n  "consent": {},\n  "contactRegistrant": {},\n  "contactAdmin": {},\n  "contactBilling": {},\n  "contactTech": {}\n}',

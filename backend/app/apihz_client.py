@@ -13,6 +13,7 @@ from urllib.request import Request, build_opener
 
 from . import db
 from .crypto import decrypt_cookie, encrypt_cookie
+from .whois_client import _date_value
 
 
 VIP_BASE_URL = "https://vip.apihz.cn/api/wangzhan"
@@ -95,23 +96,8 @@ def _request(
     return payload, raw
 
 
-def _date_value(value: str) -> date | None:
-    text = value.strip().replace("Z", "+00:00")
-    for parser in (datetime.fromisoformat,):
-        try:
-            return parser(text).date()
-        except ValueError:
-            pass
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%b-%Y"):
-        try:
-            return datetime.strptime(text[:10], fmt).date()
-        except ValueError:
-            pass
-    return None
-
-
-def _field_date(text: str, labels: tuple[str, ...]) -> date | None:
-    date_pattern = r"(\d{4}[-/]\d{2}[-/]\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+\-]\d{2}:?\d{2})?)?)"
+def _field_date(text: str, labels: tuple[str, ...]) -> date | datetime | None:
+    date_pattern = r"(\d{4}[-/]\d{2}[-/]\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s*(?:Z|[+\-]\d{2}:?\d{2}))?)?)"
     for line in text.splitlines():
         lower = line.lower()
         if any(label in lower for label in labels):
@@ -228,7 +214,7 @@ def _parse_rdap(domain: str, payload: dict[str, Any], raw_response: str) -> dict
     if payload.get("objectClassName") != "domain":
         raise _interface_error("RDAP", "返回信息不足，无法确定域名状态")
 
-    dates: dict[str, date] = {}
+    dates: dict[str, date | datetime] = {}
     for event in payload.get("events") or []:
         if not isinstance(event, dict):
             continue

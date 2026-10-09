@@ -29,6 +29,12 @@ imports update `joined_at` and older imports never overwrite it.
 
 ## Dynadot 鉴权诊断
 
+RESTful v2 注册必填 `domain.duration` 和 `domain.privacy`。适配器在未配置时
+默认发送 `{"domain":{"duration":1,"privacy":"full"}}`；已有空 `payload` 配置也适用。
+可在 `payload.domain` 内覆盖这两个值并指定联系人 ID；`privacy` 可选 `off`、
+`partial`、`full`。特殊后缀需按注册局规则设置年限（例如 `.ai` 至少 2 年）。
+参考：[Dynadot RESTful API 注册文档](https://www.dynadot.com/domain/api-document)。
+
 在 `backend` 目录执行以下 PowerShell 命令。填写同一次生成、同一环境的
 API Key 和 API Secret；这里不使用 Dynadot 账户登录密码。
 
