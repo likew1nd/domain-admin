@@ -1,5 +1,15 @@
 # Changelog
 
+## [v2.0.5](https://github.com/likew1nd/domain-admin/compare/v2.0.4...v2.0.5) (2026-10-10)
+
+### &nbsp;&nbsp;&nbsp;🚀 Features
+
+- optimize domain registration monitoring &nbsp;-&nbsp; by @likew1nd [<samp>(4ed06)</samp>](https://github.com/likew1nd/domain-admin/commit/4ed063f)
+
+### &nbsp;&nbsp;&nbsp;❤️ Contributors
+
+[![likew1nd](https://github.com/likew1nd.png?size=48)](https://github.com/likew1nd)&nbsp;&nbsp;
+
 ## [v2.0.4](https://github.com/likew1nd/domain-admin/compare/v2.0.3...v2.0.4) (2026-10-09)
 
 ### Features
