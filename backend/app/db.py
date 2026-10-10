@@ -263,7 +263,7 @@ def init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS monitor_settings (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
-                interval_seconds INTEGER NOT NULL DEFAULT 30,
+                interval_seconds INTEGER NOT NULL DEFAULT 5,
                 concurrency INTEGER NOT NULL DEFAULT 5,
                 whois_retries INTEGER NOT NULL DEFAULT 2,
                 auto_register INTEGER NOT NULL DEFAULT 0,

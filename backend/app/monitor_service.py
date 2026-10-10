@@ -26,7 +26,7 @@ class MonitorManager:
         row = db.fetch_one("SELECT * FROM monitor_settings WHERE id = 1")
         if row is None:
             return {
-                "interval_seconds": 30,
+                "interval_seconds": 5,
                 "concurrency": 5,
                 "whois_retries": 2,
                 "auto_register": False,
@@ -58,7 +58,7 @@ class MonitorManager:
 
     def save_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         values = {
-            "interval_seconds": max(5, min(3600, int(payload.get("interval_seconds", 30) or 30))),
+            "interval_seconds": max(1, min(3600, int(payload.get("interval_seconds", 5) or 5))),
             "concurrency": max(1, min(50, int(payload.get("concurrency", 5) or 5))),
             "whois_retries": max(1, min(10, int(payload.get("whois_retries", 2) or 2))),
             "auto_register": int(bool(payload.get("auto_register", False))),
@@ -148,6 +148,21 @@ class MonitorManager:
         rows.reverse()
         return rows
 
+    def registration_logs(self, limit: int = 500) -> list[dict[str, Any]]:
+        rows = db.fetch_all(
+            """
+            SELECT a.id, a.attempted_at, a.completed_at, a.domain,
+                   a.status, a.response, a.error,
+                   COALESCE(r.name, '已删除的注册商 API') AS registrar_name
+            FROM registration_attempts a
+            LEFT JOIN registrar_apis r ON r.id = a.registrar_api_id
+            ORDER BY a.id DESC LIMIT ?
+            """,
+            (max(1, min(500, limit)),),
+        )
+        rows.reverse()
+        return rows
+
     def _run(self, event: threading.Event) -> None:
         try:
             while not event.is_set():
@@ -178,7 +193,8 @@ class MonitorManager:
             WHERE c.result = 'qualified'
               AND (m.status IS NULL OR m.status = 'monitoring' OR m.status = 'available')
               AND NOT EXISTS (SELECT 1 FROM registered_domains r WHERE r.domain = c.domain)
-            ORDER BY c.checked_at ASC, c.domain
+            ORDER BY CASE WHEN m.status = 'available' THEN 0 ELSE 1 END,
+                     c.checked_at ASC, c.domain
             """
         )
         total = len(candidates)
@@ -325,6 +341,7 @@ class MonitorManager:
             self._log("info", "register", "至少一个注册商已提交抢注", domain)
             return "registered"
         self._save_domain_state(domain, "available", "所有注册商均未注册成功")
+        self._log("warning", "register", "所有注册商均未提交成功，将在下一轮重试", domain)
         return "available"
 
     def _register_one(self, domain: str, config: dict[str, Any]) -> bool:

@@ -476,6 +476,17 @@ export interface MonitorLog {
   detail: string;
 }
 
+export interface RegistrationLog {
+  id: number;
+  attempted_at: string;
+  completed_at: string;
+  domain: string;
+  registrar_name: string;
+  status: 'success' | 'failure' | 'error' | string;
+  response: string;
+  error: string;
+}
+
 export interface KickedDomain {
   domain: string;
   deletion_status: string;
@@ -573,6 +584,10 @@ export function stopMonitor() {
 
 export function fetchMonitorLogs(limit = 500) {
   return domainRequest<MonitorLog[]>(`/monitor/logs?limit=${limit}`);
+}
+
+export function fetchRegistrationLogs(limit = 500) {
+  return domainRequest<RegistrationLog[]>(`/monitor/registration-logs?limit=${limit}`);
 }
 
 export function fetchKickedDomains(params: Record<string, string | number | undefined> = {}) {

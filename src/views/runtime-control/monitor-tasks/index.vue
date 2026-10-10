@@ -6,12 +6,14 @@ import {
   type MonitorStatus,
   type RegistrarApi,
   type RegistrarApiPayload,
+  type RegistrationLog,
   createRegistrarApi,
   deleteRegistrarApi,
   fetchMonitorLogs,
   fetchMonitorSettings,
   fetchMonitorStatus,
   fetchRegistrarApis,
+  fetchRegistrationLogs,
   saveMonitorSettings,
   startMonitor,
   stopMonitor,
@@ -20,17 +22,21 @@ import {
 } from '@/service/api';
 
 const activeTab = ref<'settings' | 'apis'>('settings');
+const logTab = ref<'monitor' | 'registration'>('monitor');
 const loading = ref(false);
 const saving = ref(false);
 const actionLoading = ref(false);
 const apis = ref<RegistrarApi[]>([]);
 const logs = ref<MonitorLog[]>([]);
+const registrationLogs = ref<RegistrationLog[]>([]);
 const logViewport = ref<HTMLElement | null>(null);
+const registrationLogViewport = ref<HTMLElement | null>(null);
 const logAtLatest = ref(true);
 const logsLoading = ref(false);
+const registrationLogsLoading = ref(false);
 const status = ref<MonitorStatus | null>(null);
 const settings = reactive<MonitorSettings>({
-  interval_seconds: 30,
+  interval_seconds: 5,
   concurrency: 5,
   whois_retries: 2,
   auto_register: false,
@@ -313,10 +319,23 @@ async function loadLogs() {
   }
 }
 
+async function loadRegistrationLogs() {
+  if (registrationLogsLoading.value) return;
+  registrationLogsLoading.value = true;
+  try {
+    registrationLogs.value = await fetchRegistrationLogs(100);
+    await nextTick();
+    if (registrationLogViewport.value)
+      registrationLogViewport.value.scrollTop = registrationLogViewport.value.scrollHeight;
+  } finally {
+    registrationLogsLoading.value = false;
+  }
+}
+
 async function loadAll() {
   loading.value = true;
   try {
-    await Promise.all([loadApis(), loadSettings(), loadStatus(), loadLogs()]);
+    await Promise.all([loadApis(), loadSettings(), loadStatus(), loadLogs(), loadRegistrationLogs()]);
   } catch (error) {
     window.$message?.error(error instanceof Error ? error.message : '加载监控任务失败');
   } finally {
@@ -455,6 +474,20 @@ function logClass(level: MonitorLog['level']) {
   return { info: 'text-blue-500', warning: 'text-orange-500', error: 'text-red-500' }[level];
 }
 
+function registrationLogClass(logStatus: RegistrationLog['status']) {
+  return (
+    {
+      success: 'text-green-600',
+      failure: 'text-orange-500',
+      error: 'text-red-500'
+    }[logStatus] || 'text-gray-500'
+  );
+}
+
+function registrationLogLabel(logStatus: RegistrationLog['status']) {
+  return { success: '提交成功', failure: '提交失败', error: '调用异常' }[logStatus] || logStatus;
+}
+
 function formatTime(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('zh-CN', { hour12: false });
@@ -463,7 +496,10 @@ function formatTime(value: string) {
 onMounted(async () => {
   await loadAll();
   statusTimer = setInterval(() => loadStatus().catch(() => undefined), 3000);
-  logTimer = setInterval(() => loadLogs().catch(() => undefined), 2000);
+  logTimer = setInterval(() => {
+    loadLogs().catch(() => undefined);
+    loadRegistrationLogs().catch(() => undefined);
+  }, 2000);
 });
 
 onBeforeUnmount(() => {
@@ -527,7 +563,7 @@ onBeforeUnmount(() => {
             <ElRow :gutter="24">
               <ElCol :lg="8" :md="12" :sm="24">
                 <ElFormItem label="检查间隔（秒）">
-                  <ElInputNumber v-model="settings.interval_seconds" class="w-full" :min="5" :max="3600" />
+                  <ElInputNumber v-model="settings.interval_seconds" class="w-full" :min="1" :max="3600" />
                 </ElFormItem>
               </ElCol>
               <ElCol :lg="8" :md="12" :sm="24">
@@ -609,35 +645,66 @@ onBeforeUnmount(() => {
     </ElCard>
 
     <ElCard class="card-wrapper">
-      <template #header>
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-8px">
-            <span class="font-16px font-medium">运行日志</span>
-            <ElTag v-if="!logAtLatest" type="warning">已暂停跟随</ElTag>
-          </div>
-          <div class="flex items-center gap-8px">
+      <ElTabs v-model="logTab">
+        <ElTabPane name="monitor" label="运行日志">
+          <div class="mb-10px flex items-center justify-end gap-8px">
             <ElButton v-if="!logAtLatest" text type="primary" @click="scrollLogsToLatest">跳到最新</ElButton>
             <ElTag type="info">最新 {{ logs.length }} / 500</ElTag>
+            <ElButton text :loading="logsLoading" @click="loadLogs">刷新</ElButton>
           </div>
-        </div>
-      </template>
-      <div
-        ref="logViewport"
-        class="h-300px overflow-auto overscroll-contain border border-gray-200 rounded-4px dark:border-gray-700"
-        @scroll="handleLogScroll"
-      >
-        <div
-          v-for="log in logs"
-          :key="log.id"
-          class="grid grid-cols-[82px_90px_170px_minmax(220px,1fr)] gap-10px border-b border-gray-100 px-10px py-7px text-12px dark:border-gray-800"
-        >
-          <span class="text-gray-500">{{ formatTime(log.created_at) }}</span>
-          <span :class="logClass(log.level)">{{ log.stage }}</span>
-          <span class="truncate" :title="log.domain">{{ log.domain || '--' }}</span>
-          <span>{{ log.message }}</span>
-        </div>
-        <ElEmpty v-if="!logs.length" description="暂无运行日志" :image-size="70" />
-      </div>
+          <div
+            ref="logViewport"
+            class="h-300px overflow-auto overscroll-contain border border-gray-200 rounded-4px dark:border-gray-700"
+            @scroll="handleLogScroll"
+          >
+            <div
+              v-for="log in logs"
+              :key="log.id"
+              class="grid grid-cols-[82px_90px_170px_minmax(220px,1fr)] gap-10px border-b border-gray-100 px-10px py-7px text-12px dark:border-gray-800"
+            >
+              <span class="text-gray-500">{{ formatTime(log.created_at) }}</span>
+              <span :class="logClass(log.level)">{{ log.stage }}</span>
+              <span class="truncate" :title="log.domain">{{ log.domain || '--' }}</span>
+              <span>{{ log.message }}</span>
+            </div>
+            <ElEmpty v-if="!logs.length" description="暂无运行日志" :image-size="70" />
+          </div>
+        </ElTabPane>
+        <ElTabPane name="registration" label="注册日志">
+          <div class="mb-10px flex items-center justify-end gap-8px">
+            <ElTag type="info">最新 {{ registrationLogs.length }} / 500</ElTag>
+            <ElButton text :loading="registrationLogsLoading" @click="loadRegistrationLogs">刷新</ElButton>
+          </div>
+          <div
+            ref="registrationLogViewport"
+            class="h-300px overflow-auto overscroll-contain border border-gray-200 rounded-4px dark:border-gray-700"
+          >
+            <div
+              class="sticky top-0 z-1 grid grid-cols-[82px_170px_120px_90px_minmax(220px,1fr)] gap-10px border-b border-gray-200 bg-gray-50 px-10px py-8px text-12px text-gray-500 dark:border-gray-700 dark:bg-gray-800"
+            >
+              <span>时间</span>
+              <span>域名</span>
+              <span>注册商 API</span>
+              <span>结果</span>
+              <span>响应 / 错误</span>
+            </div>
+            <div
+              v-for="item in registrationLogs"
+              :key="item.id"
+              class="grid grid-cols-[82px_170px_120px_90px_minmax(220px,1fr)] gap-10px border-b border-gray-100 px-10px py-7px text-12px dark:border-gray-800"
+            >
+              <span class="whitespace-nowrap text-gray-500">{{ formatTime(item.attempted_at) }}</span>
+              <span class="truncate" :title="item.domain">{{ item.domain }}</span>
+              <span class="truncate" :title="item.registrar_name">{{ item.registrar_name }}</span>
+              <span :class="registrationLogClass(item.status)">{{ registrationLogLabel(item.status) }}</span>
+              <span class="truncate text-gray-500" :title="item.error || item.response">
+                {{ item.error || item.response || '--' }}
+              </span>
+            </div>
+            <ElEmpty v-if="!registrationLogs.length" description="暂无注册日志" :image-size="70" />
+          </div>
+        </ElTabPane>
+      </ElTabs>
     </ElCard>
 
     <ElDialog v-model="dialogVisible" :title="editingId ? '编辑注册商 API' : '新增注册商 API'" width="620px">

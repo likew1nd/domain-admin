@@ -369,7 +369,7 @@ class RegistrarApiPayload(BaseModel):
 
 
 class MonitorSettingsPayload(BaseModel):
-    interval_seconds: int = Field(default=30, ge=5, le=3600)
+    interval_seconds: int = Field(default=5, ge=1, le=3600)
     concurrency: int = Field(default=5, ge=1, le=50)
     whois_retries: int = Field(default=2, ge=1, le=10)
     auto_register: bool = False
@@ -744,6 +744,11 @@ def stop_monitor() -> dict[str, Any]:
 @app.get("/api/monitor/logs")
 def get_monitor_logs(limit: int = Query(default=500, ge=1, le=500)) -> dict[str, Any]:
     return ok(monitor_manager.logs(limit))
+
+
+@app.get("/api/monitor/registration-logs")
+def get_registration_logs(limit: int = Query(default=500, ge=1, le=500)) -> dict[str, Any]:
+    return ok(monitor_manager.registration_logs(limit))
 
 
 @app.get("/api/kicked-domains")
