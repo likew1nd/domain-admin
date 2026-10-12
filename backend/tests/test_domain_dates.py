@@ -14,6 +14,46 @@ from app.query_service import QueryTaskManager
 
 
 class DomainDateTests(unittest.TestCase):
+    def test_duplicate_import_preserves_query_state_and_other_metadata(self):
+        connection = sqlite3.connect(':memory:', check_same_thread=False)
+        self.addCleanup(connection.close)
+        connection.row_factory = sqlite3.Row
+        connection.execute('PRAGMA foreign_keys = ON')
+        connection.create_function('reverse', 1, lambda value: str(value)[::-1])
+        self.enterContext(patch.object(db, 'get_connection', return_value=connection))
+        db.init_db()
+        db.execute(
+            "INSERT INTO sources (id, source_key, name, adapter, base_url, download_template, created_at, updated_at) "
+            "VALUES (1, 'first', '来源一', 'generic', '', '', '', ''), "
+            "(2, 'second', '来源二', 'generic', '', '', '', '')"
+        )
+        db.upsert_domains({'id': 1, 'name': '来源一'}, '2026-10-09', {'example.com'})
+        db.execute(
+            "UPDATE domains SET first_seen_at = '2026-10-01', last_seen_at = '2026-10-09', "
+            "imported_at = '2026-10-09T01:00:00+00:00', query_time = '2026-10-10T01:00:00+00:00' "
+            "WHERE domain = 'example.com'"
+        )
+        db.execute(
+            "INSERT INTO query_tasks (id, name, filters_json, proxy_json, status, created_at, updated_at) "
+            "VALUES (1, '查询任务', '{}', '{}', 'completed', '', '')"
+        )
+        db.execute(
+            "INSERT INTO domain_checks (domain, task_id, result, filing_info, checked_at) "
+            "VALUES ('example.com', 1, 'qualified', '保留的查询结果', '2026-10-10T01:00:00+00:00')"
+        )
+
+        db.upsert_domains({'id': 2, 'name': '来源二'}, '2026-10-11', {'example.com'})
+
+        domain = db.fetch_one("SELECT * FROM domains WHERE domain = 'example.com'")
+        self.assertEqual(domain['joined_at'], '2026-10-11')
+        self.assertEqual((domain['source_id'], domain['source_name']), (2, '来源二'))
+        self.assertEqual(domain['first_seen_at'], '2026-10-01')
+        self.assertEqual(domain['last_seen_at'], '2026-10-09')
+        self.assertEqual(domain['imported_at'], '2026-10-09T01:00:00+00:00')
+        self.assertEqual(domain['query_time'], '2026-10-10T01:00:00+00:00')
+        self.assertEqual(db.fetch_one("SELECT filing_info FROM domain_checks WHERE domain = 'example.com'"), {'filing_info': '保留的查询结果'})
+        self.assertEqual(QueryTaskManager()._candidates({}, 10), [])
+
     def test_timestamps_survive_storage_snapshots_and_inclusive_list_filters(self):
         connection = sqlite3.connect(':memory:', check_same_thread=False)
         self.addCleanup(connection.close)

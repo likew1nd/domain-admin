@@ -313,6 +313,7 @@ export function previewQueryTask(payload: {
   suffixes: string[];
   exclude_chars: string[];
   domain_composition: CreateQueryTaskPayload['domain_composition'];
+  joined_within_days: number | null;
 }) {
   return domainRequest<{ total: number }>('/query-tasks/preview', {
     method: 'POST',
@@ -329,6 +330,7 @@ export interface CreateQueryTaskPayload {
   suffixes: string[];
   exclude_chars: string[];
   domain_composition: DomainCharClass[];
+  joined_within_days: number | null;
   delete_type: 'all' | 'expired' | 'redemption' | 'pending_delete';
   expiration_start: string;
   expiration_end: string;

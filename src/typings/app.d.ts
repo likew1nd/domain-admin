@@ -802,6 +802,8 @@ declare namespace App {
             deleteType: string;
             expirationTime: string;
             registrationTime: string;
+            joinedWithinDays: string;
+            days: string;
             threads: string;
             whoisRetries: string;
             icpRetries: string;

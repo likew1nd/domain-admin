@@ -5,7 +5,7 @@ import json
 import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Deque
 
 import aiohttp
@@ -348,6 +348,7 @@ class QueryTaskManager:
             in_flight_domains: set[str] = set()
             random_candidates: Deque[dict[str, Any]] = deque()
             progress_event = asyncio.Event()
+            candidate_date = datetime.now(timezone(timedelta(hours=8))).date()
 
             async def process(row: dict[str, Any]) -> None:
                 if stop_event.is_set():
@@ -547,6 +548,11 @@ class QueryTaskManager:
 
             while not stop_event.is_set():
                 progress_event.clear()
+                if filters.get("joined_within_days") is not None:
+                    today = datetime.now(timezone(timedelta(hours=8))).date()
+                    if today != candidate_date:
+                        random_candidates.clear()
+                        candidate_date = today
                 window_size = max(20, task["threads"] * 4)
                 free_slots = max(0, window_size - len(in_flight_domains))
                 pending = self._count_candidates(filters)
@@ -737,6 +743,12 @@ class QueryTaskManager:
     def _where(filters: dict[str, Any]) -> tuple[str, list[Any]]:
         conditions = ["(query_time = '' OR query_time IS NULL)"]
         params: list[Any] = []
+        days = filters.get("joined_within_days")
+        if days is not None:
+            # 按北京时间自然日包含今天及前 N 天，复用加入日期索引。
+            today = datetime.now(timezone(timedelta(hours=8))).date()
+            conditions.extend(["joined_at >= ?", "joined_at <= ?"])
+            params.extend([(today - timedelta(days=days)).isoformat(), today.isoformat()])
         label_expression = "substr(domain, 1, length(domain) - instr(reverse(domain), '.'))"
         lengths = [int(value) for value in filters.get("lengths", []) if str(value).isdigit()]
         # suffix、label_length 为导入时预先计算的列，可走 idx_domains_suffix 索引

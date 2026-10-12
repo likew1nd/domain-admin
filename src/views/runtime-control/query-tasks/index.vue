@@ -96,6 +96,7 @@ const defaultForm: CreateQueryTaskPayload = {
   suffixes: [],
   exclude_chars: [],
   domain_composition: [],
+  joined_within_days: null,
   delete_type: 'expired',
   expiration_start: '',
   expiration_end: '',
@@ -477,7 +478,8 @@ async function preview() {
       lengths: form.lengths,
       suffixes: form.suffixes,
       exclude_chars: form.exclude_chars,
-      domain_composition: form.domain_composition
+      domain_composition: form.domain_composition,
+      joined_within_days: form.joined_within_days ?? null
     });
     previewTotal.value = data.total;
   } catch (error) {
@@ -896,6 +898,26 @@ onBeforeUnmount(() => {
                           :value="item.value"
                         />
                       </ElSelect>
+                    </ElFormItem>
+                  </ElCol>
+                  <ElCol :lg="6" :md="12" :sm="24">
+                    <ElFormItem :label="$t('page.runtime.queryTasks.joinedWithinDays')">
+                      <div class="w-full">
+                        <div class="flex items-center gap-8px">
+                          <ElInputNumber
+                            v-model="form.joined_within_days"
+                            class="min-w-0 flex-1"
+                            :min="0"
+                            :max="36500"
+                            :precision="0"
+                            :controls="false"
+                            :placeholder="$t('page.runtime.queryTasks.all')"
+                            :aria-label="$t('page.runtime.queryTasks.joinedWithinDays')"
+                            @change="invalidatePreview"
+                          />
+                          <span>{{ $t('page.runtime.queryTasks.days') }}</span>
+                        </div>
+                      </div>
                     </ElFormItem>
                   </ElCol>
                   <ElCol :span="24">

@@ -730,7 +730,7 @@ def upsert_domains(
     with _db_lock, get_connection() as connection:
         for domain in sorted(domains):
             existing = connection.execute(
-                "SELECT joined_at, source_id, source_name, first_seen_at, query_time FROM domains WHERE domain = ?",
+                "SELECT joined_at, source_id, source_name FROM domains WHERE domain = ?",
                 (domain,),
             ).fetchone()
 
@@ -759,7 +759,6 @@ def upsert_domains(
                 continue
 
             latest_date = max(existing["joined_at"], requested_date)
-            query_time = "" if requested_date > existing["joined_at"] else existing["query_time"]
             effective_source_id = source["id"] if requested_date >= existing["joined_at"] else existing["source_id"]
             effective_source_name = source["name"] if requested_date >= existing["joined_at"] else existing["source_name"]
             changed = (
@@ -770,18 +769,13 @@ def upsert_domains(
             connection.execute(
                 """
                 UPDATE domains
-                    SET source_id = ?, source_name = ?, joined_at = ?,
-                    first_seen_at = ?, last_seen_at = ?, imported_at = ?, query_time = ?
+                    SET source_id = ?, source_name = ?, joined_at = ?
                 WHERE domain = ?
                 """,
                 (
                     effective_source_id,
                     effective_source_name,
                     latest_date,
-                    min(existing["first_seen_at"], requested_date),
-                    max(existing["joined_at"], requested_date),
-                    imported_at,
-                    query_time,
                     domain,
                 ),
             )

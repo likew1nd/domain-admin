@@ -279,6 +279,7 @@ class QueryTaskPayload(BaseModel):
     suffixes: list[str] = Field(default_factory=list)
     exclude_chars: list[str] = Field(default_factory=list, max_length=100)
     domain_composition: list[Literal["letter", "digit", "chinese", "symbol"]] = Field(default_factory=list)
+    joined_within_days: int | None = Field(default=None, ge=0, le=36500)
     delete_type: Literal["all", "expired", "redemption", "pending_delete"] = "expired"
     expiration_start: str = ""
     expiration_end: str = ""
@@ -328,6 +329,7 @@ class QueryPreviewPayload(BaseModel):
     suffixes: list[str] = Field(default_factory=list)
     exclude_chars: list[str] = Field(default_factory=list, max_length=100)
     domain_composition: list[Literal["letter", "digit", "chinese", "symbol"]] = Field(default_factory=list)
+    joined_within_days: int | None = Field(default=None, ge=0, le=36500)
 
     @field_validator("domain_composition", mode="before")
     @classmethod
@@ -1407,6 +1409,7 @@ def preview_query_task(payload: QueryPreviewPayload) -> dict[str, Any]:
                     "suffixes": payload.suffixes,
                     "exclude_chars": payload.exclude_chars,
                     "domain_composition": payload.domain_composition,
+                    "joined_within_days": payload.joined_within_days,
                 }
             )
         }
@@ -1433,6 +1436,7 @@ def create_query_task(payload: QueryTaskPayload) -> dict[str, Any]:
                     "suffixes": payload.suffixes,
                     "exclude_chars": payload.exclude_chars,
                     "domain_composition": payload.domain_composition,
+                    "joined_within_days": payload.joined_within_days,
                     "delete_type": payload.delete_type,
                     "expiration_start": payload.expiration_start,
                     "expiration_end": payload.expiration_end,
