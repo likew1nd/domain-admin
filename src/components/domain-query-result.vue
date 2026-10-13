@@ -197,6 +197,17 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
         >
           <ElTableColumn v-if="result === 'qualified'" type="selection" width="48" fixed="left" />
           <ElTableColumn prop="domain" :label="$t('page.domain.queryResults.domain')" min-width="190" fixed="left" />
+          <ElTableColumn v-if="result === 'qualified'" prop="booking_status" label="预订状态" width="100">
+            <template #default="{ row }">
+              <ElTag
+                :type="
+                  row.booking_status === 'success' ? 'success' : row.booking_status === 'failure' ? 'danger' : 'warning'
+                "
+              >
+                {{ row.booking_status === 'success' ? '成功' : row.booking_status === 'failure' ? '失败' : '预订中' }}
+              </ElTag>
+            </template>
+          </ElTableColumn>
           <ElTableColumn prop="deletion_status" :label="$t('page.domain.queryResults.deletionStatus')" width="100">
             <template #default="{ row }"><DomainStatusTag kind="deletion" :value="row.deletion_status" /></template>
           </ElTableColumn>

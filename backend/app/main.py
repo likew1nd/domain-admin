@@ -295,6 +295,7 @@ class BookingSchemePayload(QueryExceptionSchemePayload):
 
 class BookingSettingsPayload(BaseModel):
     enabled: bool = False
+    interval_seconds: int = Field(default=60, ge=1, le=86400)
     schemes: list[BookingSchemePayload] = Field(default_factory=list, max_length=20)
 
 
@@ -1784,6 +1785,13 @@ def list_query_results(
                c.creation_date, c.icp_found, c.qq_status, c.wechat_status,
                c.pollution_status, c.blocked_status, c.blacklist_status,
                c.filing_nature, c.filing_info, c.checked_at,
+               CASE
+                 WHEN EXISTS (SELECT 1 FROM booking_attempts b WHERE b.domain = c.domain AND b.status = 'success') THEN 'success'
+                 WHEN EXISTS (SELECT 1 FROM booking_attempts b WHERE b.domain = c.domain AND b.retry_at != '') THEN 'pending'
+                 WHEN EXISTS (SELECT 1 FROM booking_attempts b WHERE b.domain = c.domain)
+                  AND NOT EXISTS (SELECT 1 FROM booking_attempts b WHERE b.domain = c.domain AND b.status != 'failure') THEN 'failure'
+                 ELSE 'pending'
+               END AS booking_status,
                COALESCE(m.last_checked_at, '') AS last_checked_at
         FROM domain_checks c JOIN domains d ON d.domain = c.domain
         LEFT JOIN monitor_domain_state m ON m.domain = c.domain

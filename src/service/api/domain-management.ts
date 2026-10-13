@@ -185,6 +185,7 @@ export interface BookingScheme extends QueryExceptionScheme {
 
 export interface BookingSettings {
   enabled: boolean;
+  interval_seconds: number;
   schemes: BookingScheme[];
 }
 
@@ -249,6 +250,7 @@ export interface QueryResult {
   filing_nature: string;
   filing_info: string;
   checked_at: string;
+  booking_status: 'success' | 'failure' | 'pending';
   last_checked_at: string;
 }
 

@@ -136,6 +136,7 @@ def init_db() -> None:
                 error TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 completed_at TEXT NOT NULL DEFAULT '',
+                retry_at TEXT NOT NULL DEFAULT '',
                 UNIQUE(domain, registrar_api_id, channel)
             );
             CREATE INDEX IF NOT EXISTS idx_booking_status ON booking_attempts(status, id);
@@ -434,6 +435,9 @@ def init_db() -> None:
         monitor_columns = {row["name"] for row in connection.execute("PRAGMA table_info(monitor_settings)").fetchall()}
         if "availability_api_id" not in monitor_columns:
             connection.execute("ALTER TABLE monitor_settings ADD COLUMN availability_api_id INTEGER NOT NULL DEFAULT 0")
+        booking_attempt_columns = {row["name"] for row in connection.execute("PRAGMA table_info(booking_attempts)").fetchall()}
+        if "retry_at" not in booking_attempt_columns:
+            connection.execute("ALTER TABLE booking_attempts ADD COLUMN retry_at TEXT NOT NULL DEFAULT ''")
         source_columns = {row["name"] for row in connection.execute("PRAGMA table_info(sources)").fetchall()}
         if "deleted_at" not in source_columns:
             connection.execute("ALTER TABLE sources ADD COLUMN deleted_at TEXT NOT NULL DEFAULT ''")

@@ -14,7 +14,7 @@ import { compositionOptions, compositionText } from '@/components/domain-filter'
 
 const props = defineProps<{ apis: RegistrarApi[] }>();
 const emit = defineEmits<{ refreshApis: [] }>();
-const settings = reactive<BookingSettings>({ enabled: false, schemes: [] });
+const settings = reactive<BookingSettings>({ enabled: false, interval_seconds: 60, schemes: [] });
 const loading = ref(false);
 const saving = ref(false);
 type ExceptionSchemeDraft = Omit<
@@ -215,7 +215,10 @@ async function saveSettings() {
   }));
   saving.value = true;
   try {
-    Object.assign(settings, await saveBookingSettings({ enabled: settings.enabled, schemes }));
+    Object.assign(
+      settings,
+      await saveBookingSettings({ enabled: settings.enabled, interval_seconds: settings.interval_seconds, schemes })
+    );
     window.$message?.success('预订设置已保存');
   } catch (error) {
     window.$message?.error(error instanceof Error ? error.message : '保存预订设置失败');
@@ -233,9 +236,19 @@ onMounted(loadSettings);
         <template #title>
           <div class="w-full flex items-center justify-between gap-16px">
             <span>
-              预订会冻结 Gname 账户资金。明确失败才换下一通道；超时或结果不明确时暂停并等待核实。预订成功后继续监控。
+              预订会冻结 Gname
+              账户资金。明确不支持才换下一通道；暂时无法预订或结果不明确时按预订间隔重试。预订成功后继续监控。
             </span>
-            <div class="flex shrink-0 items-center gap-8px whitespace-nowrap">
+            <div class="flex shrink-0 flex-wrap items-center justify-end gap-8px">
+              <span>预订间隔</span>
+              <ElInputNumber
+                v-model="settings.interval_seconds"
+                :min="1"
+                :max="86400"
+                controls-position="right"
+                class="!w-120px"
+              />
+              <span class="text-12px text-gray-500">秒</span>
               <span>自动预订</span>
               <ElSwitch v-model="settings.enabled" aria-label="自动预订" />
             </div>

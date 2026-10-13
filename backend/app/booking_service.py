@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import threading
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from . import db
@@ -12,6 +12,12 @@ from .crypto import decrypt_cookie
 from .registrar_adapters import GnameRegistrar, RegistrarError
 
 logger = logging.getLogger(__name__)
+DEFAULT_BOOKING_INTERVAL = 60
+
+
+def is_unsupported_booking(error: str, response: str = "") -> bool:
+    detail = f"{error} {response}".lower()
+    return any(text in detail for text in ("不支持", "unsupported", "not supported"))
 
 MONITOR_DOMAINS_SQL = """SELECT c.* FROM domain_checks c
     LEFT JOIN monitor_domain_state m ON m.domain = c.domain
@@ -135,8 +141,18 @@ class BookingManager:
         domain = context["domain"]
         with db._db_lock, db.get_connection() as connection:
             attempts = connection.execute("SELECT * FROM booking_attempts WHERE domain = ?", (domain,)).fetchall()
-            # 成功或尚不能确认结果时，不再尝试其他通道；也清理旧版留下的未发送项。
-            if any(row["status"] in {"success", "sending", "uncertain"} for row in attempts):
+            # 成功或提交中时，不再尝试其他通道；也清理旧版留下的未发送项。
+            if any(row["status"] in {"success", "sending"} for row in attempts):
+                connection.execute("DELETE FROM booking_attempts WHERE domain = ? AND status = 'pending'", (domain,))
+                return None
+            uncertain = next((row for row in attempts if row["status"] == "uncertain"), None)
+            if uncertain:
+                if uncertain["retry_at"] and uncertain["retry_at"] <= db.utc_now():
+                    connection.execute(
+                        "UPDATE booking_attempts SET status = 'pending', response = '', error = '', retry_at = '' WHERE id = ?",
+                        (uncertain["id"],),
+                    )
+                    return dict(connection.execute("SELECT * FROM booking_attempts WHERE id = ?", (uncertain["id"],)).fetchone())
                 connection.execute("DELETE FROM booking_attempts WHERE domain = ? AND status = 'pending'", (domain,))
                 return None
             previous = {(row["registrar_api_id"], row["channel"]): row for row in attempts}
@@ -145,6 +161,14 @@ class BookingManager:
                 for channel in scheme.get("channels") or []:
                     old = previous.get((api_id, channel))
                     if old and old["status"] == "failure":
+                        if old["retry_at"]:
+                            if old["retry_at"] > db.utc_now():
+                                return None
+                            connection.execute(
+                                "UPDATE booking_attempts SET status = 'pending', response = '', error = '', retry_at = '' WHERE id = ?",
+                                (old["id"],),
+                            )
+                            return dict(connection.execute("SELECT * FROM booking_attempts WHERE id = ?", (old["id"],)).fetchone())
                         continue
                     # 每个域名只保留当前轮到的通道，配置重排后也按最新顺序执行。
                     connection.execute("""DELETE FROM booking_attempts WHERE domain = ? AND status = 'pending'
@@ -201,7 +225,7 @@ class BookingManager:
         if not current or current["status"] != "pending":
             return
         sent = False
-        status, response, error = "failure", "", ""
+        status, response, error, retry_at = "failure", "", "", ""
         try:
             qualified = db.fetch_one(MONITOR_DOMAINS_SQL + " AND c.domain = ?", (attempt["domain"],))
             if not qualified:
@@ -248,8 +272,15 @@ class BookingManager:
                 error = result.reason or booking_result({"status": status, "response": response})
         except Exception as exc:
             status, error = ("uncertain" if sent else "failure"), str(exc)
-        db.execute("UPDATE booking_attempts SET status = ?, response = ?, error = ?, completed_at = ? WHERE id = ?",
-                   (status, response, error, db.utc_now(), attempt["id"]))
+        retryable = any(text in f"{error} {response}".lower() for text in ("暂时", "稍后", "超时", "timeout", "timed out", "网络", "服务异常", "temporarily", "无法", "异常", "其他问题", "unknown"))
+        if status == "failure" and retryable and not is_unsupported_booking(error, response):
+            interval = max(1, int(settings.get("interval_seconds") or DEFAULT_BOOKING_INTERVAL))
+            retry_at = (datetime.now(timezone.utc) + timedelta(seconds=interval)).replace(microsecond=0).isoformat()
+        elif status == "uncertain":
+            interval = max(1, int(settings.get("interval_seconds") or DEFAULT_BOOKING_INTERVAL))
+            retry_at = (datetime.now(timezone.utc) + timedelta(seconds=interval)).replace(microsecond=0).isoformat()
+        db.execute("UPDATE booking_attempts SET status = ?, response = ?, error = ?, completed_at = ?, retry_at = ? WHERE id = ?",
+                   (status, response, error, db.utc_now(), retry_at, attempt["id"]))
         self.enqueue(attempt["domain"], self.settings())
 
 

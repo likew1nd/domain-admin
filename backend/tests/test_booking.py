@@ -77,6 +77,28 @@ class BookingTests(unittest.TestCase):
                 self.assertEqual([(row['channel'], row['status']) for row in db.fetch_all("SELECT * FROM booking_attempts ORDER BY id")], expected)
                 self.assertEqual([call.args[1] for call in self.adapter.backorder.call_args_list], [channel for channel, _ in expected])
 
+    def test_temporary_booking_failure_waits_and_unsupported_channels_end_in_failure(self):
+        settings = self.manager.save_settings(dict(self.settings, interval_seconds=3600))
+        self.adapter.backorder.return_value = RegisterResult(False, 200, '{"code":-1,"msg":"暂时无法预订"}')
+        self.manager.scan(settings)
+        self.submit_pending()
+        first = db.fetch_one("SELECT * FROM booking_attempts WHERE channel = 1")
+        self.assertEqual(first["status"], "failure")
+        self.assertTrue(first["retry_at"])
+        self.manager.scan(settings)
+        self.assertIsNone(db.fetch_one("SELECT * FROM booking_attempts WHERE status = 'pending'"))
+
+        db.execute("UPDATE booking_attempts SET retry_at = '' WHERE id = ?", (first["id"],))
+        self.adapter.backorder.side_effect = [
+            RegisterResult(False, 200, '{"code":-1,"msg":"该通道不支持此后缀"}'),
+            RegisterResult(False, 200, '{"code":-1,"msg":"该通道不支持此后缀"}')
+        ]
+        self.manager.scan(settings)
+        self.submit_pending()
+        self.submit_pending()
+        rows = db.fetch_all("SELECT channel, status, retry_at FROM booking_attempts ORDER BY channel")
+        self.assertEqual([(row["channel"], row["status"], row["retry_at"]) for row in rows], [(1, "failure", ""), (2, "failure", "")])
+
     def test_success_or_uncertain_history_cancels_legacy_pending_channels(self):
         for status in ('success', 'uncertain'):
             with self.subTest(status=status):
