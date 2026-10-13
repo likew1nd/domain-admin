@@ -189,6 +189,7 @@ const routeMap: RouteMap = {
   "domain-generation_domain-dictionary": "/domain-generation/domain-dictionary",
   "domain-generation_domain-generator": "/domain-generation/domain-generator",
   "domain-management": "/domain-management",
+  "domain-management_booked": "/domain-management/booked",
   "domain-management_expired": "/domain-management/expired",
   "domain-management_kicked": "/domain-management/kicked",
   "domain-management_qualified": "/domain-management/qualified",

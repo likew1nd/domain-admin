@@ -152,6 +152,26 @@ const registration = computed(() => {
   const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
   return { success, failed: total - success, total };
 });
+const booking = computed(
+  () =>
+    runtime.value?.booking || {
+      total: 0,
+      success: 0,
+      processing: 0,
+      uncertain: 0,
+      failure: 0
+    }
+);
+const bookingExtra = computed(() => {
+  const current = booking.value;
+  const items = [
+    `成功 ${fmt(current.success)} 个`,
+    `失败 ${fmt(current.failure)} 个`,
+    `处理中 ${fmt(current.processing)} 个`
+  ];
+  if (current.uncertain) items.push(`待确认 ${fmt(current.uncertain)} 个`);
+  return items.join('，');
+});
 
 /* ---------------- 指标卡片 ---------------- */
 
@@ -239,6 +259,15 @@ const kpiCards = computed<KpiCard[]>(() => {
       color: '#9270ca',
       route: 'domain-management_kicked',
       extra: `监控中 ${fmt(runtime.value?.monitor.domains.monitoring)} 个`
+    },
+    {
+      key: 'booked',
+      title: '预订域名',
+      value: booking.value.total,
+      icon: 'mdi:calendar-plus-outline',
+      color: '#269a99',
+      route: 'domain-management_booked',
+      extra: bookingExtra.value
     },
     {
       key: 'registered',
@@ -463,7 +492,7 @@ const riskList = computed(() => {
             <p class="welcome-desc">
               {{ todayText }}
               <template v-if="stats">
-                · 统计明细更新于 {{ formatDateTime(stats.generatedAt) }}，查询计数每 15 秒同步
+                · 统计明细更新于 {{ formatDateTime(stats.generatedAt) }}，查询与今日新增每 15 秒同步
               </template>
             </p>
           </div>
@@ -552,7 +581,7 @@ const riskList = computed(() => {
             <template #header>
               <div class="card-header">
                 <span>近 14 天入库趋势</span>
-                <span class="card-sub">按加入日期、数据来源统计</span>
+                <span class="card-sub">按首次入库时间、数据来源统计</span>
               </div>
             </template>
             <DashChart :option="trendOption" height="390px" />

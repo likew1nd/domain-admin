@@ -26,6 +26,7 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   alova_user: () => import("@/views/alova/user/index.vue"),
   "domain-generation_domain-dictionary": () => import("@/views/domain-generation/domain-dictionary/index.vue"),
   "domain-generation_domain-generator": () => import("@/views/domain-generation/domain-generator/index.vue"),
+  "domain-management_booked": () => import("@/views/domain-management/booked/index.vue"),
   "domain-management_expired": () => import("@/views/domain-management/expired/index.vue"),
   "domain-management_kicked": () => import("@/views/domain-management/kicked/index.vue"),
   "domain-management_qualified": () => import("@/views/domain-management/qualified/index.vue"),

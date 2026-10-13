@@ -23,6 +23,7 @@ from .collector import (
     shutdown_executor,
 )
 from .crypto import decrypt_cookie, encrypt_cookie
+from .booking_service import booking_manager, booking_result, gname_account
 from .query_service import query_manager
 from .monitor_service import monitor_manager
 from .registrar_adapters import RegistrarError, create_adapter as create_registrar_adapter
@@ -125,7 +126,7 @@ def build_list_stats(
 class SourcePayload(BaseModel):
     source_key: str = Field(min_length=2, max_length=40)
     name: str = Field(min_length=1, max_length=80)
-    adapter: Literal["gname", "west_cn", "generic"] = "generic"
+    adapter: Literal["gname", "west_cn", "aliyun", "generic"] = "generic"
     base_url: str = Field(min_length=1, max_length=500)
     page_path: str = Field(default="", max_length=500)
     download_template: str = Field(min_length=1, max_length=500)
@@ -248,7 +249,7 @@ class SchedulePayload(BaseModel):
 class QueryExceptionSchemePayload(BaseModel):
     name: str = Field(default="", max_length=80)
     enabled: bool = True
-    logic: Literal["or", "and"] = "or"
+    domain_composition: list[Literal["letter", "digit", "chinese", "symbol"]] = Field(default_factory=list, max_length=4)
     lengths: list[int] = Field(default_factory=list, max_length=63)
     suffixes: list[str] = Field(default_factory=list, max_length=100)
     patterns: list[str] = Field(default_factory=list, max_length=20)
@@ -264,6 +265,37 @@ class QueryExceptionPayload(BaseModel):
     patterns: list[str] = Field(default_factory=list, max_length=20)
     contains: list[str] = Field(default_factory=list, max_length=50)
     schemes: list[QueryExceptionSchemePayload] = Field(default_factory=list, max_length=20)
+
+
+class BookingSchemePayload(QueryExceptionSchemePayload):
+    registration_start: str = ""
+    registration_end: str = ""
+    filing_start: str = ""
+    filing_end: str = ""
+    filing_natures: list[str] = Field(default_factory=list, max_length=20)
+    api_id: int = Field(default=0, ge=0)
+    channels: list[int] = Field(default_factory=list, max_length=100)
+
+    @field_validator("registration_start", "registration_end", "filing_start", "filing_end")
+    @classmethod
+    def validate_date(cls, value: str) -> str:
+        if value:
+            if not DATE_PATTERN.fullmatch(value):
+                raise ValueError("日期格式应为 YYYY-MM-DD")
+            date.fromisoformat(value)
+        return value
+
+    @field_validator("channels")
+    @classmethod
+    def validate_channels(cls, values: list[int]) -> list[int]:
+        if any(value <= 0 for value in values):
+            raise ValueError("预订通道编号必须为正整数")
+        return list(dict.fromkeys(values))
+
+
+class BookingSettingsPayload(BaseModel):
+    enabled: bool = False
+    schemes: list[BookingSchemePayload] = Field(default_factory=list, max_length=20)
 
 
 def _composition_before(value: Any) -> Any:
@@ -456,7 +488,9 @@ async def lifespan(_app: FastAPI):
     system_manage.init_system()
     db.seed_gname_source(encrypt_cookie)
     db.seed_west_source(encrypt_cookie)
+    db.seed_aliyun_source(encrypt_cookie)
     scheduler.start()
+    booking_manager.start()
     query_manager.resume_all()
     monitor_manager.resume_if_configured()
     dashboard.warm_up()
@@ -464,6 +498,7 @@ async def lifespan(_app: FastAPI):
     monitor_manager.shutdown()
     scheduler.stop()
     query_manager.shutdown()
+    booking_manager.shutdown()
     shutdown_executor()
 
 
@@ -1005,6 +1040,92 @@ def list_registered_domains(
     return ok(data)
 
 
+@app.get("/api/booked-domains")
+def list_booked_domains(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    domain_composition: str | None = None,
+    length: str | None = None,
+    suffix: str | None = None,
+    keyword: str | None = None,
+    deletion_status: str | None = None,
+    booked_start: str | None = None,
+    booked_end: str | None = None,
+    wechat_status: str | None = None,
+    qq_status: str | None = None,
+    pollution_status: str | None = None,
+    blocked_status: str | None = None,
+    blacklist_status: str | None = None,
+    filing_nature: str | None = None,
+    with_stats: bool = False,
+) -> dict[str, Any]:
+    conditions: list[str] = []
+    params: list[Any] = []
+    booked_at_expression = "COALESCE(NULLIF(r.completed_at, ''), r.created_at)"
+    label_expression = "substr(r.domain, 1, length(r.domain) - instr(reverse(r.domain), '.'))"
+    if composition := parse_composition_filter(domain_composition):
+        condition, kinds = db.label_kind_condition(composition, f"label_kind_of({label_expression})")
+        conditions.append(condition)
+        params.extend(kinds)
+    if lengths := parse_length_filter(length):
+        conditions.append(f"length({label_expression}) IN ({','.join('?' for _ in lengths)})")
+        params.extend(lengths)
+    if suffixes := split_filter_values(suffix):
+        conditions.append("(" + " OR ".join("lower(r.domain) LIKE ?" for _ in suffixes) + ")")
+        params.extend(f"%.{item}" for item in suffixes)
+    if keyword:
+        keyword_fields = ["r.domain", "r.registrar_name", "r.scheme_name", "CAST(r.channel AS TEXT)", "c.filing_info", "d.source_name"]
+        conditions.append("(" + " OR ".join(f"{field} LIKE ?" for field in keyword_fields) + ")")
+        params.extend([f"%{keyword.strip()}%"] * len(keyword_fields))
+    for field, value in (
+        ("deletion_status", deletion_status),
+        ("wechat_status", wechat_status),
+        ("qq_status", qq_status),
+        ("pollution_status", pollution_status),
+        ("blocked_status", blocked_status),
+        ("blacklist_status", blacklist_status),
+        ("filing_nature", filing_nature),
+    ):
+        if value:
+            conditions.append(f"c.{field} = ?")
+            params.append(value)
+    if booked_start:
+        ensure_date_format(booked_start)
+        conditions.append(f"substr({booked_at_expression}, 1, 10) >= ?")
+        params.append(booked_start)
+    if booked_end:
+        ensure_date_format(booked_end)
+        conditions.append(f"substr({booked_at_expression}, 1, 10) <= ?")
+        params.append(booked_end)
+    where = " AND ".join(conditions) or "1 = 1"
+    joins = "FROM booking_attempts r LEFT JOIN domains d ON d.domain = r.domain LEFT JOIN domain_checks c ON c.domain = r.domain"
+    total = db.fetch_one(f"SELECT COUNT(*) AS total {joins} WHERE {where}", tuple(params))["total"]
+    details = ", ".join(f"COALESCE(c.{field}, '') AS {field}" for field in REGISTERED_SNAPSHOT_FIELDS)
+    rows = db.fetch_all(
+        f"""
+        SELECT r.id, r.domain, {details},
+               d.source_name AS source, r.scheme_name, r.registrar_name, r.channel,
+               r.status, r.error, r.response, {booked_at_expression} AS booked_at
+        {joins}
+        WHERE {where}
+        ORDER BY booked_at DESC, r.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (*params, page_size, (page - 1) * page_size),
+    )
+    for row in rows:
+        row["booking_result"] = booking_result(row)
+    data: dict[str, Any] = {"records": rows, "current": page, "size": page_size, "total": total}
+    if with_stats:
+        select = ", ".join(f"COALESCE(c.{field}, '') AS {field}" for field in STAT_FIELDS)
+        data["stats"] = build_list_stats(
+            f"SELECT {select}, COUNT(*) AS count {joins} WHERE {where} {STAT_GROUP_BY}",
+            f"SELECT d.source_name AS label, COUNT(*) AS count {joins} WHERE {where} GROUP BY d.source_name ORDER BY count DESC",
+            tuple(params),
+        )
+    return ok(data)
+
+
 @app.delete("/api/registered-domains")
 def clear_registered_domains() -> dict[str, Any]:
     row = db.fetch_one("SELECT COUNT(*) AS total FROM registered_domains")
@@ -1361,6 +1482,7 @@ def get_query_settings() -> dict[str, Any]:
     except json.JSONDecodeError:
         return ok(None)
     settings["domain_composition"] = db.normalize_composition(settings.get("domain_composition"))
+    settings.pop("booking", None)
     settings.setdefault("domain_info_source", "whois")
     settings.setdefault("apihz_id", "")
     settings.setdefault("random_query", False)
@@ -1385,6 +1507,52 @@ def save_query_settings(payload: QueryTaskPayload) -> dict[str, Any]:
         (json.dumps(settings, ensure_ascii=False), updated_at),
     )
     return ok({"settings": settings, "updated_at": updated_at})
+
+
+def validate_booking(settings: BookingSettingsPayload) -> None:
+    for scheme in settings.schemes:
+        for start, end in ((scheme.registration_start, scheme.registration_end),
+                           (scheme.filing_start, scheme.filing_end)):
+            if start and end and start > end:
+                raise fail("预订方案开始日期不能晚于结束日期", 422)
+        if settings.enabled and scheme.enabled:
+            try:
+                gname_account(scheme.api_id)
+            except (RegistrarError, RuntimeError) as exc:
+                raise fail(str(exc), 422) from exc
+            if not scheme.channels:
+                raise fail("启用的预订方案必须选择 Gname 通道", 422)
+            if not any((scheme.lengths, scheme.suffixes, scheme.patterns, scheme.contains,
+                        scheme.registration_start, scheme.registration_end, scheme.filing_start,
+                        scheme.filing_end, scheme.filing_natures)):
+                raise fail("启用的预订方案至少需要一个匹配条件", 422)
+    if settings.enabled and not any(scheme.enabled for scheme in settings.schemes):
+        raise fail("自动预订至少需要一个启用方案", 422)
+
+
+@app.get("/api/registrar-apis/{api_id}/backorder-channels")
+def list_backorder_channels(api_id: int) -> dict[str, Any]:
+    try:
+        _, adapter = gname_account(api_id)
+        return ok(adapter.backorder_channels())
+    except (RegistrarError, RuntimeError) as exc:
+        raise fail(str(exc), 422) from exc
+
+
+@app.get("/api/booking/logs")
+def list_booking_logs(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+    return ok(db.fetch_all("SELECT * FROM booking_attempts ORDER BY id DESC LIMIT ?", (limit,)))
+
+
+@app.get("/api/monitor/booking-settings")
+def get_booking_settings() -> dict[str, Any]:
+    return ok(booking_manager.settings())
+
+
+@app.put("/api/monitor/booking-settings")
+def save_booking_settings(payload: BookingSettingsPayload) -> dict[str, Any]:
+    validate_booking(payload)
+    return ok(booking_manager.save_settings(payload.model_dump()))
 
 
 @app.get("/api/query-settings/intercept-key")

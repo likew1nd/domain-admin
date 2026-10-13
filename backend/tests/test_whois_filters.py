@@ -93,7 +93,7 @@ class WhoisFilterTests(unittest.TestCase):
         )
         self.assertEqual(QueryTaskManager._filing_info({"queried": True, "records": [{}]}), ("已备案", ""))
 
-    def test_exception_schemes_support_independent_switches_and_and_or_logic(self):
+    def test_exception_schemes_support_independent_switches_and_require_all_conditions(self):
         filters = {
             "exceptions": {
                 "schemes": [
@@ -119,11 +119,23 @@ class WhoisFilterTests(unittest.TestCase):
         self.assertEqual(QueryTaskManager._match_exception("abc0.cn", filters), (False, ""))
 
         filters["exceptions"]["schemes"][0]["logic"] = "or"
-        self.assertEqual(QueryTaskManager._match_exception("abcd.com", filters)[0], True)
+        self.assertFalse(QueryTaskManager._match_exception("abcd.com", filters)[0])
+        filters["exceptions"]["schemes"][1]["enabled"] = True
+        self.assertTrue(QueryTaskManager._match_exception("xyz.com", filters)[0])
 
     def test_exception_legacy_shape_remains_supported(self):
         filters = {"exceptions": {"enabled": True, "contains": ["abc"]}}
         self.assertEqual(QueryTaskManager._match_exception("abc.cn", filters), (True, "包含字符 abc"))
+
+    def test_length_and_suffix_are_required_even_with_legacy_or(self):
+        for logic in (None, "or", "and"):
+            scheme = {"enabled": True, "lengths": [4], "suffixes": ["com"]}
+            if logic is not None:
+                scheme["logic"] = logic
+            for domain, hits in (("abcd.cn", 1), ("longname.com", 1), ("abcd.com", 2), ("longname.cn", 0)):
+                with self.subTest(logic=logic, domain=domain):
+                    matched, _ = QueryTaskManager._match_exception(domain, {"exceptions": {"schemes": [scheme]}})
+                    self.assertEqual(matched, hits == 2)
 
     @patch("app.query_service.lookup", return_value={"expiration_date": "", "creation_date": "", "statuses": []})
     def test_empty_whois_result_is_retried_and_not_accepted(self, _lookup):

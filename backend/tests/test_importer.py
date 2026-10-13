@@ -33,6 +33,23 @@ class ImporterTests(unittest.TestCase):
         data = "domain,status\nfirst.io,ok\nsecond.cn,ok\n".encode()
         self.assertEqual(parse_domains(data, "csv", "csv"), {"first.io", "second.cn"})
 
+    def test_legacy_chinese_encoding_does_not_collect_mojibake(self):
+        # GBK for 凭证 is also valid UTF-8, where it becomes ƾ֤.
+        text = "四川商城.com\n凭证.com\nexample.com\n"
+        self.assertEqual(parse_domains(text.encode("gb18030")), {"四川商城.com", "凭证.com", "example.com"})
+        self.assertEqual(parse_domains("凭证.com".encode("gb18030"), encoding="gb18030"), {"凭证.com"})
+
+    def test_encoding_is_strict_and_applies_to_csv_and_zip_contents(self):
+        raw = "域名,状态\n凭证.com,正常\n".encode("gb18030")
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zipped:
+            zipped.writestr("domains.csv", raw)
+        for content in (raw, archive.getvalue()):
+            self.assertEqual(parse_domains(content, "csv", "csv"), {"凭证.com"})
+        self.assertEqual(parse_domains("凭证.com".encode("utf-8-sig"), encoding="gb18030"), {"凭证.com"})
+        with self.assertRaisesRegex(SourceError, "编码"):
+            parse_domains(b"example.com\n\xff")
+
     def test_html_and_scripts_cannot_be_imported_as_domain_lists_even_in_a_zip(self):
         html = b'<!doctype html><html><script>\nwindow.dataLayer\ns.async\ns.src\njquery.init\n</script></html>'
         archive = io.BytesIO()

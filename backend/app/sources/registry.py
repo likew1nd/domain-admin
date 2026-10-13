@@ -3,11 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from .base import SourceAdapter, SourceError
+from .aliyun import AliyunAdapter
 from .gname import GnameAdapter
 from .west_cn import WestCnAdapter
 
 
 ADAPTERS = {
+    "aliyun": AliyunAdapter,
     "gname": GnameAdapter,
     "west_cn": WestCnAdapter,
     "generic": SourceAdapter,

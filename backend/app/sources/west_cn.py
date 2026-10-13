@@ -109,7 +109,7 @@ class WestCnAdapter(SourceAdapter):
         if response.content.lstrip().startswith((b"<", b"\xef\xbb\xbf")) and "text/html" in content_type.lower():
             raise SourceError("西部数码没有返回导出文件，请检查登录 Cookie 或筛选条件")
         filename = f"west-{date.today().isoformat()}-{suffix}.txt"
-        return DownloadedFile(response.content, filename, content_type)
+        return DownloadedFile(response.content, filename, content_type, encoding="gb18030")
 
     def download(self, requested_date: str, file_format: str) -> DownloadedFile:
         suffix = str(self.source.get("default_suffix") or "com").strip().lower().lstrip(".")

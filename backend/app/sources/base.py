@@ -33,6 +33,7 @@ class DownloadedFile:
     content: bytes
     filename: str
     content_type: str
+    encoding: str | None = None
 
 
 def build_url(base_url: str, path: str) -> str:
@@ -86,7 +87,9 @@ def normalize_domain(value: str) -> str | None:
     return candidate if len(ascii_domain) <= 253 and DOMAIN_RE.fullmatch(ascii_domain) else None
 
 
-def parse_domains(content: bytes, file_format: str = "txt", parser: str = "line") -> set[str]:
+def parse_domains(
+    content: bytes, file_format: str = "txt", parser: str = "line", *, encoding: str | None = None
+) -> set[str]:
     raw = content
     if raw[:4] == b"PK\x03\x04":
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
@@ -95,7 +98,22 @@ def parse_domains(content: bytes, file_format: str = "txt", parser: str = "line"
                 return set()
             raw = archive.read(files[0])
 
-    text = raw.decode("utf-8-sig", errors="replace")
+    # A GBK sequence can also be valid UTF-8 (凭证 becomes ƾ֤); known
+    # source encodings must take precedence, except for an explicit UTF-8 BOM.
+    if raw.startswith(b"\xef\xbb\xbf"):
+        encodings = ("utf-8-sig",)
+    elif encoding:
+        encodings = (encoding,)
+    else:
+        encodings = ("utf-8-sig", "gb18030")
+    for file_encoding in encodings:
+        try:
+            text = raw.decode(file_encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise SourceError("域名文件编码不正确，请使用 UTF-8 或 GBK/GB18030 编码")
     if LOGIN_TITLE_RE.search(text) or LOGIN_TITLE_RE.search(raw[:200_000].decode("gb18030", errors="ignore")):
         raise SourceError("下载内容是登录页面，Cookie 已失效或未配置，请重新登录源站后更新 Cookie")
     if WEB_CONTENT_RE.search(text):
@@ -142,4 +160,4 @@ class SourceAdapter:
         return DownloadedFile(response.content, filename, content_type)
 
     def parse(self, downloaded: DownloadedFile, file_format: str) -> set[str]:
-        return parse_domains(downloaded.content, file_format, self.source.get("parser", "line"))
+        return parse_domains(downloaded.content, file_format, self.source.get("parser", "line"), encoding=downloaded.encoding)

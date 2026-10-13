@@ -130,6 +130,7 @@ MENU_SEED: list[dict[str, Any]] = [
             _page("domain-management_qualified", "符合域名列表", 3, icon="mdi:check-decagram-outline"),
             _page("domain-management_unqualified", "不符合域名列表", 4, icon="mdi:close-circle-outline"),
             _page("domain-management_registered", "注册成功列表", 5, icon="mdi:trophy-outline"),
+            _page("domain-management_booked", "预订列表", 6, icon="mdi:calendar-check-outline"),
         ],
     },
     {
@@ -296,21 +297,22 @@ def _migrate_domain_generation_menu(connection: Any, now: str) -> None:
     )
 
 
-def _migrate_registered_menu(connection: Any, now: str) -> None:
-    """已有库补充注册成功列表菜单，授权给已拥有域名管理目录的角色。"""
-    if connection.execute("SELECT 1 FROM sys_menus WHERE route_name = 'domain-management_registered'").fetchone():
-        return
+def _migrate_domain_list_menus(connection: Any, now: str) -> None:
+    """已有库补充注册、预订列表菜单，授权给已拥有域名管理目录的角色。"""
     parent = connection.execute("SELECT id FROM sys_menus WHERE route_name = 'domain-management'").fetchone()
     if parent is None:
         return
     group = next(item for item in MENU_SEED if item["route_name"] == "domain-management")
-    item = next(child for child in group["children"] if child["route_name"] == "domain-management_registered")
-    _seed_menus(connection, [item], int(parent[0]), now)
-    menu_id = connection.execute("SELECT id FROM sys_menus WHERE route_name = 'domain-management_registered'").fetchone()[0]
-    connection.execute(
-        "INSERT OR IGNORE INTO sys_role_menus (role_id, menu_id) SELECT role_id, ? FROM sys_role_menus WHERE menu_id = ?",
-        (menu_id, int(parent[0])),
-    )
+    for route_name in ("domain-management_registered", "domain-management_booked"):
+        if connection.execute("SELECT 1 FROM sys_menus WHERE route_name = ?", (route_name,)).fetchone():
+            continue
+        item = next(child for child in group["children"] if child["route_name"] == route_name)
+        _seed_menus(connection, [item], int(parent[0]), now)
+        menu_id = connection.execute("SELECT id FROM sys_menus WHERE route_name = ?", (route_name,)).fetchone()[0]
+        connection.execute(
+            "INSERT OR IGNORE INTO sys_role_menus (role_id, menu_id) SELECT role_id, ? FROM sys_role_menus WHERE menu_id = ?",
+            (menu_id, int(parent[0])),
+        )
 
 
 def _migrate_setting_menu(connection: Any, now: str) -> None:
@@ -456,7 +458,7 @@ def init_system() -> None:
 
         _migrate_domain_generation_menu(connection, now)
         _migrate_setting_menu(connection, now)
-        _migrate_registered_menu(connection, now)
+        _migrate_domain_list_menus(connection, now)
 
         if not connection.execute("SELECT 1 FROM sys_users LIMIT 1").fetchone():
             role_ids = {row["role_code"]: row["id"] for row in connection.execute("SELECT id, role_code FROM sys_roles")}

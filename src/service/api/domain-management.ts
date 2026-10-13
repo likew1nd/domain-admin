@@ -44,7 +44,7 @@ export interface DomainSource {
   id: number;
   source_key: string;
   name: string;
-  adapter: 'gname' | 'west_cn' | 'generic';
+  adapter: 'gname' | 'west_cn' | 'aliyun' | 'generic';
   base_url: string;
   page_path: string;
   download_template: string;
@@ -115,7 +115,12 @@ export interface QueryTask {
     exceptions: QueryExceptionSettings;
     intercept_checks?: InterceptCheckItem[];
   };
-  proxy: { mode: string; endpoint: string; max_requests: number; stages?: string[] };
+  proxy: {
+    mode: string;
+    endpoint: string;
+    max_requests: number;
+    stages?: string[];
+  };
   threads: number;
   whois_retries: number;
   icp_retries: number;
@@ -147,12 +152,10 @@ export interface QueryTask {
 /** 拦截检测项：微信、QQ、污染、拦截（被墙）、黑名单 */
 export type InterceptCheckItem = 'wechat' | 'qq' | 'pollution' | 'blocked' | 'blacklist';
 
-export type QueryExceptionLogic = 'and' | 'or';
-
 export interface QueryExceptionScheme {
   name: string;
   enabled: boolean;
-  logic: QueryExceptionLogic;
+  domain_composition: DomainCharClass[];
   lengths: number[];
   suffixes: string[];
   patterns: string[];
@@ -168,6 +171,62 @@ export interface QueryExceptionSettings {
   patterns: string[];
   contains: string[];
   schemes: QueryExceptionScheme[];
+}
+
+export interface BookingScheme extends QueryExceptionScheme {
+  registration_start: string;
+  registration_end: string;
+  filing_start: string;
+  filing_end: string;
+  filing_natures: string[];
+  api_id: number;
+  channels: number[];
+}
+
+export interface BookingSettings {
+  enabled: boolean;
+  schemes: BookingScheme[];
+}
+
+export interface GnameChannel {
+  channel: number;
+  channel_name: string;
+  tlds: string[];
+  price: number | string;
+  deposit: number | string;
+  status: number;
+}
+
+export interface BookingLog {
+  id: number;
+  domain: string;
+  registrar_name: string;
+  scheme_name: string;
+  channel: number;
+  status: 'pending' | 'sending' | 'success' | 'failure' | 'uncertain';
+  response: string;
+  error: string;
+  created_at: string;
+  completed_at: string;
+}
+
+export function fetchBackorderChannels(apiId: number) {
+  return domainRequest<GnameChannel[]>(`/registrar-apis/${apiId}/backorder-channels`);
+}
+
+export function fetchBookingLogs(limit = 100) {
+  return domainRequest<BookingLog[]>(`/booking/logs?limit=${limit}`);
+}
+
+export function fetchBookingSettings() {
+  return domainRequest<BookingSettings>('/monitor/booking-settings');
+}
+
+export function saveBookingSettings(payload: BookingSettings) {
+  return domainRequest<BookingSettings>('/monitor/booking-settings', {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
 }
 
 export interface QueryResult {
@@ -305,7 +364,10 @@ export function fetchQueryTasks() {
 }
 
 export function fetchQuerySettings() {
-  return domainRequest<{ settings: CreateQueryTaskPayload; updated_at: string } | null>('/query-settings');
+  return domainRequest<{
+    settings: CreateQueryTaskPayload;
+    updated_at: string;
+  } | null>('/query-settings');
 }
 
 export function previewQueryTask(payload: {
@@ -356,7 +418,10 @@ export interface CreateQueryTaskPayload {
 }
 
 export function saveQuerySettings(payload: CreateQueryTaskPayload) {
-  return domainRequest<{ settings: CreateQueryTaskPayload; updated_at: string }>('/query-settings', {
+  return domainRequest<{
+    settings: CreateQueryTaskPayload;
+    updated_at: string;
+  }>('/query-settings', {
     method: 'PUT',
     body: JSON.stringify(payload)
   });
@@ -542,6 +607,19 @@ export interface RegisteredDomainPage {
   stats?: DomainListStats;
 }
 
+export interface BookedDomain extends Omit<RegisteredDomain, 'registered_at'> {
+  scheme_name: string;
+  channel: number;
+  status: BookingLog['status'];
+  error: string;
+  booking_result: string;
+  booked_at: string;
+}
+
+export interface BookedDomainPage extends Omit<RegisteredDomainPage, 'records'> {
+  records: BookedDomain[];
+}
+
 export function fetchRegistrarApis() {
   return domainRequest<RegistrarApi[]>('/registrar-apis');
 }
@@ -559,7 +637,11 @@ export function deleteRegistrarApi(id: number) {
 }
 
 export function testRegistrarApi(id: number) {
-  return domainRequest<{ success: boolean; status_code: number; response: string }>(`/registrar-apis/${id}/test`, {
+  return domainRequest<{
+    success: boolean;
+    status_code: number;
+    response: string;
+  }>(`/registrar-apis/${id}/test`, {
     method: 'POST'
   });
 }
@@ -616,6 +698,17 @@ export function fetchRegisteredDomains(params: Record<string, string | number | 
     if (value !== undefined && value !== '' && key !== 'page' && key !== 'pageSize') search.set(key, String(value));
   });
   return domainRequest<RegisteredDomainPage>(`/registered-domains?${search.toString()}`);
+}
+
+export function fetchBookedDomains(params: Record<string, string | number | undefined> = {}) {
+  const search = new URLSearchParams({
+    page: String(params.page || 1),
+    page_size: String(params.pageSize || 20)
+  });
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== '' && key !== 'page' && key !== 'pageSize') search.set(key, String(value));
+  });
+  return domainRequest<BookedDomainPage>(`/booked-domains?${search.toString()}`);
 }
 
 export function clearRegisteredDomains() {
@@ -690,7 +783,13 @@ export function fetchSchedules() {
 }
 
 export function saveSchedule(
-  payload: { source_id: number; name: string; run_time: string; suffixes: string[]; enabled: boolean },
+  payload: {
+    source_id: number;
+    name: string;
+    run_time: string;
+    suffixes: string[];
+    enabled: boolean;
+  },
   id?: number
 ) {
   return domainRequest<Schedule>(id ? `/schedules/${id}` : '/schedules', {
@@ -805,6 +904,13 @@ export interface DashboardRuntime {
     domains: Record<string, number>;
   };
   registration: Record<string, number>;
+  booking: {
+    total: number;
+    success: number;
+    processing: number;
+    uncertain: number;
+    failure: number;
+  };
   registrarApis: { total: number; enabled: number };
   sources: { id: number; name: string; enabled: boolean; hasCookie: boolean }[];
 }
@@ -825,7 +931,7 @@ export interface DashboardActivity {
 }
 
 export interface DashboardLive {
-  stats: Pick<DashboardStats, 'total' | 'queried' | 'pending' | 'queryRate'>;
+  stats: Pick<DashboardStats, 'total' | 'queried' | 'pending' | 'queryRate' | 'todayJoined' | 'yesterdayJoined'>;
   checks: DashboardChecks;
   runtime: DashboardRuntime;
   alerts: DashboardAlert[];

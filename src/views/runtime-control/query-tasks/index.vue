@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, onActivated, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import {
   type CreateQueryTaskPayload,
   type DomainSuffix,
@@ -19,7 +19,9 @@ import {
   stopQueryTask
 } from '@/service/api';
 import { $t } from '@/locales';
-import { compositionOptions } from '@/components/domain-filter';
+import { compositionOptions, compositionText } from '@/components/domain-filter';
+import RuntimeLog from '@/components/runtime-log.vue';
+import type { RuntimeLogEntry } from '@/components/runtime-log';
 
 const suffixes = ref<DomainSuffix[]>([]);
 const suffixesLoading = ref(false);
@@ -27,10 +29,8 @@ const suffixesError = ref('');
 const suffixGroupTab = ref<'all' | DomainSuffix['group']>('all');
 const tasks = ref<QueryTask[]>([]);
 const logs = ref<QueryLog[]>([]);
-const logViewport = ref<HTMLElement | null>(null);
 const logsLoading = ref(false);
 const logTaskId = ref<number | null>(null);
-const logAtLatest = ref(true);
 const activeView = ref<'query' | 'logs'>('query');
 const dataRequestPending = ref(false);
 const submitting = ref(false);
@@ -63,7 +63,7 @@ function createExceptionScheme(index = 1): QueryExceptionScheme {
   return {
     name: `方案 ${index}`,
     enabled: true,
-    logic: 'or',
+    domain_composition: [],
     lengths: [],
     suffixes: [],
     patterns: [],
@@ -76,7 +76,7 @@ function createExceptionSchemeDraft(scheme: QueryExceptionScheme, index: number)
   return {
     name: scheme.name || `方案 ${index}`,
     enabled: scheme.enabled,
-    logic: scheme.logic || 'or',
+    domain_composition: [...(scheme.domain_composition || [])],
     lengths: scheme.lengths.join(','),
     suffixes: scheme.suffixes.join(','),
     patterns: scheme.patterns.join(','),
@@ -295,7 +295,7 @@ function syncExceptionSchemes() {
   form.exceptions.schemes = exceptionSchemeDrafts.value.map((draft, index) => ({
     name: draft.name.trim() || `方案 ${index + 1}`,
     enabled: draft.enabled,
-    logic: draft.logic,
+    domain_composition: [...draft.domain_composition],
     lengths: parseLengths(draft.lengths),
     suffixes: parseTokens(draft.suffixes),
     patterns: parseTokens(draft.patterns).map(value => value.toUpperCase()),
@@ -311,6 +311,10 @@ function syncExceptionSchemes() {
 
 function addExceptionScheme() {
   const newIndex = exceptionSchemeDrafts.value.length;
+  if (newIndex >= 20) {
+    window.$message?.warning('最多支持 20 个方案');
+    return;
+  }
   exceptionSchemeDrafts.value.push(createExceptionSchemeDraft(createExceptionScheme(newIndex + 1), newIndex + 1));
   activeExceptionSchemeIndex.value = newIndex;
 }
@@ -330,8 +334,9 @@ function getSchemeSummary(scheme: ExceptionSchemeDraft): string {
   if (scheme.suffixes) parts.push(`后缀:${scheme.suffixes}`);
   if (scheme.patterns) parts.push(`模式:${scheme.patterns}`);
   if (scheme.contains) parts.push(`包含:${scheme.contains}`);
-  if (scheme.exclude_chars) parts.push(`排除:${scheme.exclude_chars}`);
-  return parts.length ? parts.join(' · ') : '未配置';
+  if (scheme.domain_composition.length) parts.push(`组成:${compositionText(scheme.domain_composition)}`);
+  const summary = parts.length ? parts.join(' 且 ') : '未配置';
+  return scheme.exclude_chars ? `${summary}；排除:${scheme.exclude_chars}` : summary;
 }
 
 function retryLabel(key: string) {
@@ -588,36 +593,17 @@ function progress(task: QueryTask) {
   return task.total_count ? Math.min(100, Math.round((task.processed_count / task.total_count) * 100)) : 0;
 }
 
-function logLevelClass(level: QueryLog['level']) {
-  return {
-    info: 'text-blue-500',
-    warning: 'text-orange-500',
-    error: 'text-red-500'
-  }[level];
-}
-
-function logLevelLabel(level: QueryLog['level']) {
-  return { info: '信息', warning: '警告', error: '错误' }[level];
-}
-
-function formatLogTime(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString('zh-CN', { hour12: false });
-}
-
-function isLogAtLatest() {
-  const viewport = logViewport.value;
-  return !viewport || viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 24;
-}
-
-function handleLogScroll() {
-  logAtLatest.value = isLogAtLatest();
-}
-
-function scrollLogsToLatest() {
-  if (logViewport.value) logViewport.value.scrollTop = logViewport.value.scrollHeight;
-  logAtLatest.value = true;
-}
+const logEntries = computed<RuntimeLogEntry[]>(() =>
+  logs.value.map(log => ({
+    id: log.id,
+    time: log.created_at,
+    domain: log.domain,
+    stage: log.stage,
+    status: `${{ info: '信息', warning: '警告', error: '错误' }[log.level]} · ${log.message}`,
+    detail: log.detail,
+    tone: log.level
+  }))
+);
 
 async function loadLogs() {
   if (logsLoading.value) return;
@@ -628,22 +614,13 @@ async function loadLogs() {
     return;
   }
   const taskChanged = logTaskId.value !== task.id;
-  const stickToLatest = taskChanged || logAtLatest.value || !logViewport.value;
-  const previousScrollTop = logViewport.value?.scrollTop ?? 0;
   if (taskChanged) {
     logTaskId.value = task.id;
     logs.value = [];
-    logAtLatest.value = true;
   }
   logsLoading.value = true;
   try {
     logs.value = await fetchQueryLogs(task.id, 500);
-    await nextTick();
-    if (stickToLatest || (logTaskId.value === task.id && logs.value.length === 0)) scrollLogsToLatest();
-    else if (logViewport.value) {
-      logViewport.value.scrollTop = previousScrollTop;
-      handleLogScroll();
-    }
   } catch {
     // 日志轮询失败时保留已有内容，下一轮继续刷新。
   } finally {
@@ -651,12 +628,8 @@ async function loadLogs() {
   }
 }
 
-watch(activeView, async value => {
-  if (value !== 'logs') return;
-  await loadLogs();
-  if (!logAtLatest.value) return;
-  await nextTick();
-  scrollLogsToLatest();
+watch(activeView, value => {
+  if (value === 'logs') loadLogs();
 });
 
 const refreshTimer = setInterval(loadData, 3000);
@@ -1052,7 +1025,7 @@ onBeforeUnmount(() => {
                   class="mb-12px rounded-6px bg-gray-50 px-12px py-10px text-13px text-gray-600 dark:bg-gray-800/60 dark:text-gray-300"
                 >
                   WHOIS
-                  条件必须先通过；启用的任一方案命中后，即使未备案或已拦截也会进入符合域名列表。方案内可选择“或”或“且”逻辑。
+                  条件必须先通过；启用的任一方案命中后，即使未备案或已拦截也会进入符合域名列表。方案内所有已填写条件均须满足（且）。
                 </div>
                 <div v-if="activeExceptionScheme" class="grid gap-12px lg:grid-cols-[260px_minmax(0,1fr)]">
                   <div class="min-w-0">
@@ -1078,6 +1051,7 @@ onBeforeUnmount(() => {
                             <ElTag size="small" :type="scheme.enabled ? 'success' : 'info'">
                               {{ scheme.enabled ? '启用' : '停用' }}
                             </ElTag>
+                            <ElTag size="small" type="info">且</ElTag>
                           </div>
                           <div class="mt-4px truncate text-12px text-gray-500">
                             {{ getSchemeSummary(scheme) }}
@@ -1090,20 +1064,12 @@ onBeforeUnmount(() => {
 
                   <div class="min-w-0">
                     <ElRow :gutter="16">
-                      <ElCol :lg="8" :md="12" :sm="24">
+                      <ElCol :lg="12" :md="12" :sm="24">
                         <ElFormItem label="方案名称">
                           <ElInput v-model="activeExceptionScheme.name" placeholder="方案名称" />
                         </ElFormItem>
                       </ElCol>
-                      <ElCol :lg="8" :md="12" :sm="24">
-                        <ElFormItem label="匹配逻辑">
-                          <ElRadioGroup v-model="activeExceptionScheme.logic">
-                            <ElRadioButton label="or">或</ElRadioButton>
-                            <ElRadioButton label="and">且</ElRadioButton>
-                          </ElRadioGroup>
-                        </ElFormItem>
-                      </ElCol>
-                      <ElCol :lg="8" :md="12" :sm="24">
+                      <ElCol :lg="12" :md="12" :sm="24">
                         <ElFormItem label="状态">
                           <div class="h-32px flex items-center gap-6px">
                             <ElSwitch v-model="activeExceptionScheme.enabled" size="small" />
@@ -1174,11 +1140,34 @@ onBeforeUnmount(() => {
                           />
                         </ElFormItem>
                       </ElCol>
+                      <ElCol :lg="8" :md="12" :sm="24">
+                        <ElFormItem label="域名组成">
+                          <ElSelect
+                            v-model="activeExceptionScheme.domain_composition"
+                            class="w-full"
+                            multiple
+                            clearable
+                            placeholder="不限"
+                          >
+                            <ElOption
+                              v-for="item in compositionOptions"
+                              :key="item.value"
+                              :label="item.label"
+                              :value="item.value"
+                            />
+                          </ElSelect>
+                        </ElFormItem>
+                      </ElCol>
                     </ElRow>
-                    <div class="text-12px text-gray-400">
-                      方案内的多个条件按“{{
-                        activeExceptionScheme.logic === 'and' ? '且' : '或'
-                      }}”判断；排除字符命中时方案直接不匹配；多个方案之间按“或”判断。重复模式仅支持大写字母。
+                    <div class="mb-8px text-13px text-primary" aria-live="polite">
+                      匹配条件：{{ getSchemeSummary(activeExceptionScheme) }}
+                    </div>
+                    <div class="text-12px text-gray-500">
+                      方案内所有已填写条件均须满足（且）；排除字符命中时方案直接不匹配；多个方案之间按“或”判断。重复模式仅支持大写字母。
+                    </div>
+                    <div class="mt-8px text-12px text-gray-500">
+                      例外策略在查询范围筛选之后生效。
+                      修改后保存配置；已启动的任务使用启动时的配置，需要重新启动任务才会应用修改。
                     </div>
                   </div>
                 </div>
@@ -1306,48 +1295,15 @@ onBeforeUnmount(() => {
 
         <ElTabPane name="logs" label="运行日志">
           <ElCard class="card-wrapper">
-            <template #header>
-              <div class="flex items-center justify-between gap-8px">
-                <div class="flex items-center gap-8px">
-                  <span>{{ $t('page.runtime.queryTasks.logTitle') }}</span>
-                  <ElTag type="info">最新 {{ logs.length }} / 500</ElTag>
-                  <ElTag v-if="!logAtLatest" type="warning">已暂停跟随</ElTag>
-                </div>
-                <div class="flex items-center gap-8px">
-                  <ElButton v-if="!logAtLatest" text type="primary" @click="scrollLogsToLatest">跳到最新</ElButton>
-                  <ElButton text :loading="logsLoading" @click="loadLogs">{{ $t('common.refresh') }}</ElButton>
-                </div>
-              </div>
-            </template>
-            <div
-              ref="logViewport"
-              class="h-420px overflow-auto overscroll-contain border border-gray-200 rounded-4px dark:border-gray-700"
-              @scroll="handleLogScroll"
-            >
-              <div
-                class="sticky top-0 z-1 grid grid-cols-[82px_170px_72px_180px_minmax(240px,1fr)] gap-12px border-b border-gray-200 bg-gray-50 px-12px py-8px text-12px text-gray-500 dark:border-gray-700 dark:bg-gray-800"
-              >
-                <span>时间</span>
-                <span>域名</span>
-                <span>环节</span>
-                <span>状态</span>
-                <span>详细信息</span>
-              </div>
-              <div v-if="!logs.length" class="px-12px py-30px text-center text-13px text-gray-400">暂无运行日志</div>
-              <div
-                v-for="item in logs"
-                :key="item.id"
-                class="grid grid-cols-[82px_170px_72px_180px_minmax(240px,1fr)] gap-12px border-b border-gray-100 px-12px py-7px text-12px dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50"
-              >
-                <span class="whitespace-nowrap text-gray-500">{{ formatLogTime(item.created_at) }}</span>
-                <span class="truncate" :title="item.domain">{{ item.domain || '--' }}</span>
-                <span class="whitespace-nowrap">{{ item.stage || '--' }}</span>
-                <span class="truncate" :class="logLevelClass(item.level)" :title="item.message">
-                  {{ logLevelLabel(item.level) }} · {{ item.message }}
-                </span>
-                <span class="truncate text-gray-500" :title="item.detail">{{ item.detail || '--' }}</span>
-              </div>
-            </div>
+            <RuntimeLog
+              :key="logTaskId ?? 'none'"
+              :entries="logEntries"
+              :loading="logsLoading"
+              :active="activeView === 'logs'"
+              :height="420"
+              :title="$t('page.runtime.queryTasks.logTitle')"
+              @refresh="loadLogs"
+            />
           </ElCard>
         </ElTabPane>
       </ElTabs>

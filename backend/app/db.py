@@ -118,6 +118,28 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS booking_settings (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                settings_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS booking_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain TEXT NOT NULL,
+                registrar_api_id INTEGER NOT NULL,
+                registrar_name TEXT NOT NULL,
+                channel INTEGER NOT NULL,
+                scheme_name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                response TEXT NOT NULL DEFAULT '',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                completed_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(domain, registrar_api_id, channel)
+            );
+            CREATE INDEX IF NOT EXISTS idx_booking_status ON booking_attempts(status, id);
+
             CREATE TABLE IF NOT EXISTS domains (
                 domain TEXT PRIMARY KEY,
                 source_id INTEGER NOT NULL,
@@ -131,6 +153,7 @@ def init_db() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_domains_joined_at ON domains(joined_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_domains_imported_at ON domains(imported_at DESC);
             CREATE INDEX IF NOT EXISTS idx_domains_source_id ON domains(source_id);
 
             CREATE TABLE IF NOT EXISTS import_runs (
@@ -404,6 +427,7 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_domains_label_length ON domains(label_length, label_kind, query_time)"
         )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_domains_joined_domain ON domains(joined_at DESC, domain)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_domains_imported_at ON domains(imported_at DESC)")
         registrar_columns = {row["name"] for row in connection.execute("PRAGMA table_info(registrar_apis)").fetchall()}
         if "config_json" not in registrar_columns:
             connection.execute("ALTER TABLE registrar_apis ADD COLUMN config_json TEXT NOT NULL DEFAULT '{}'")
@@ -814,6 +838,25 @@ def seed_gname_source(encrypt_cookie) -> None:
             1,
             now,
             now,
+        ),
+    )
+
+
+def seed_aliyun_source(encrypt_cookie) -> None:
+    existing = fetch_one("SELECT id FROM sources WHERE source_key = ? OR adapter = ?", ("aliyun", "aliyun"))
+    if existing:
+        return
+    now = utc_now()
+    execute(
+        """
+        INSERT INTO sources (
+            source_key, name, adapter, base_url, page_path, download_template,
+            parser, cookie_ciphertext, enabled, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "aliyun", "阿里云", "aliyun", "https://domainapi.aliyun.com", "",
+            "/partnerReserve/snatchExport.json", "line", encrypt_cookie(""), 1, now, now,
         ),
     )
 

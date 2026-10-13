@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, quote_plus, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 
@@ -312,20 +312,46 @@ class GnameRegistrar(RegistrarAdapter):
         appid, appkey = _split_token(self.token, "GNAME")
         config = _json_object(self.config.get("config_json", self.config.get("config", {})))
         endpoint = str(config.get("endpoint") or self.config.get("endpoint") or self.endpoint).rstrip("/")
-        params = {"appid": appid, "gntime": str(int(datetime.now(timezone.utc).timestamp())), **params}
         extra = config.get("extra_params", {})
-        if isinstance(extra, dict):
-            params.update(extra)
-        signing = "&".join(f"{key}={quote(str(params[key]).strip(), safe='')}" for key in sorted(params))
+        params = {**(extra if isinstance(extra, dict) else {}), **params,
+                  "appid": appid, "gntime": str(int(datetime.now(timezone.utc).timestamp()))}
+        params.pop("gntoken", None)
+        params = {key: str(value).strip() for key, value in params.items()}
+        # PHP urlencode (Gname's canonical signing rule) also escapes tilde.
+        signing = "&".join(f"{key}={quote_plus(params[key], safe='').replace('~', '%7E')}" for key in sorted(params))
         params["gntoken"] = hashlib.md5(f"{signing}{appkey}".encode()).hexdigest().upper()
         api_path = path if path.startswith("/") else f"/{path}"
         request = Request(
             f"{endpoint}{api_path}",
             data=urlencode(params).encode(),
-            headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+            headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded",
+                     "User-Agent": "DomainAdmin/1.0"},
             method="POST",
         )
-        return _send(request)
+        return _send(request, response_limit=100_000) if api_path == "/api/backorder/channel" else _send(request)
+
+    def backorder(self, domain: str, channel: int, remark: str = "") -> RegisterResult:
+        status, response = self._request_signed("/api/backorder/add", {"ym": domain, "td": channel, "bz": remark})
+        try:
+            payload = json.loads(response)
+        except json.JSONDecodeError as exc:
+            raise RegistrarError("预订响应无法解析，请到 Gname 核实订单") from exc
+        if not isinstance(payload, dict) or str(payload.get("code")) not in {"1", "-1"}:
+            raise RegistrarError("预订响应状态不明确，请到 Gname 核实订单")
+        if status >= 500:
+            raise RegistrarError("预订接口服务异常，请到 Gname 核实订单")
+        return RegisterResult(200 <= status < 300 and str(payload.get("code")) == "1", status, response)
+
+    def backorder_channels(self) -> list[dict[str, Any]]:
+        status, response = self._request_signed("/api/backorder/channel", {})
+        try:
+            payload = json.loads(response)
+        except json.JSONDecodeError as exc:
+            raise RegistrarError("Gname 通道响应无法解析") from exc
+        if not (200 <= status < 300 and isinstance(payload, dict)
+                and str(payload.get("code")) == "1" and isinstance(payload.get("data"), list)):
+            raise RegistrarError("获取 Gname 通道失败，请检查账号与 API 权限")
+        return [item for item in payload["data"] if isinstance(item, dict)]
 
     def register(self, domain: str) -> RegisterResult:
         config = _json_object(self.config.get("config_json", self.config.get("config", {})))
@@ -349,12 +375,15 @@ class GnameRegistrar(RegistrarAdapter):
 
     def test(self) -> tuple[bool, int, str]:
         config = _json_object(self.config.get("config_json", self.config.get("config", {})))
-        status_code, response = self._request_signed(str(config.get("test_path", "/user/info")), {})
+        path = str(config.get("test_path") or "/api/user/info")
+        if path == "/user/info":
+            path = "/api/user/info"
+        status_code, response = self._request_signed(path, {})
         try:
             payload = json.loads(response)
         except json.JSONDecodeError:
             payload = {}
-        return 200 <= status_code < 300 and isinstance(payload, dict) and int(payload.get("code", -1)) == 0, status_code, response
+        return 200 <= status_code < 300 and isinstance(payload, dict) and str(payload.get("code")) == "1", status_code, response
 
 
 class GodaddyRegistrar(RegistrarAdapter):
@@ -546,12 +575,12 @@ def _send_dynadot(request: Request) -> tuple[int, str]:
             connection.close()
 
 
-def _send(request: Request) -> tuple[int, str]:
+def _send(request: Request, response_limit: int = 4000) -> tuple[int, str]:
     try:
         with urlopen(request, timeout=20) as response:
-            return int(response.status), response.read().decode("utf-8", errors="replace")[:4000]
+            return int(response.status), response.read().decode("utf-8", errors="replace")[:response_limit]
     except HTTPError as exc:
-        return int(exc.code), exc.read().decode("utf-8", errors="replace")[:4000]
+        return int(exc.code), exc.read().decode("utf-8", errors="replace")[:response_limit]
     except URLError as exc:
         raise RegistrarError(f"注册商 API 网络错误: {exc.reason}") from exc
 

@@ -141,6 +141,17 @@ export const generatedRoutes: GeneratedRoute[] = [
     },
     children: [
       {
+        name: 'domain-management_booked',
+        path: '/domain-management/booked',
+        component: 'view.domain-management_booked',
+        meta: {
+          title: 'domain-management_booked',
+          i18nKey: 'route.domain-management_booked',
+          icon: 'mdi:calendar-check-outline',
+          order: 6
+        }
+      },
+      {
         name: 'domain-management_expired',
         path: '/domain-management/expired',
         component: 'view.domain-management_expired',

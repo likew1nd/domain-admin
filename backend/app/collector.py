@@ -82,7 +82,8 @@ def _run_date(
     adapter = None
     try:
         cookie = decrypt_cookie(source["cookie_ciphertext"])
-        adapter = create_adapter(source, cookie)
+        config = {**source, "collection_suffixes": suffixes or []} if source.get("adapter") == "aliyun" else source
+        adapter = create_adapter(config, cookie)
         downloaded = adapter.download(requested_date, file_format)
         _run_content(
             run_id,
@@ -93,6 +94,7 @@ def _run_date(
             downloaded.filename,
             source.get("parser", "line"),
             suffixes=suffixes,
+            encoding=downloaded.encoding,
         )
     except Exception as exc:  # the run is recorded so the UI can show the source error
         _update_run(run_id, status="failure", error=str(exc), finished_at=db.utc_now())
@@ -111,9 +113,10 @@ def _run_content(
     parser: str = "line",
     persist_prefix: str = "",
     suffixes: list[str] | None = None,
+    encoding: str | None = None,
 ) -> None:
     try:
-        domains = parse_domains(content, file_format, parser)
+        domains = parse_domains(content, file_format, parser, encoding=encoding)
         if not domains:
             raise SourceError("文件中未识别到有效域名")
         folder = DOWNLOAD_DIR / source["source_key"]
@@ -177,6 +180,7 @@ def _run_west_suffix(run_id: int, source: dict[str, Any], requested_date: str, s
             downloaded.content,
             downloaded.filename,
             source.get("parser", "line"),
+            encoding=downloaded.encoding,
         )
     except Exception as exc:
         _update_run(run_id, status="failure", error=f"后缀 {suffix}：{exc}", finished_at=db.utc_now())

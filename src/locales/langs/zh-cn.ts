@@ -183,6 +183,7 @@ const local: App.I18n.Schema = {
     'domain-generation_domain-generator': '域名生成',
     'domain-generation_domain-dictionary': '字典管理',
     'domain-management': '域名管理',
+    'domain-management_booked': '预订列表',
     'domain-management_expired': '过期域名列表',
     'domain-management_qualified': '符合域名列表',
     'domain-management_unqualified': '不符合域名列表',

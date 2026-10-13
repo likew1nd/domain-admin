@@ -805,7 +805,8 @@ class QueryTaskManager:
         return QueryTaskManager._match_exception_scheme(label, suffix, exception)
 
     @staticmethod
-    def _match_exception_scheme(label: str, suffix: str, scheme: dict[str, Any]) -> tuple[bool, str]:
+    def _match_exception_scheme(label: str, suffix: str, scheme: dict[str, Any],
+                                context: dict[str, Any] | None = None) -> tuple[bool, str]:
         excluded = {
             char
             for value in scheme.get("exclude_chars", [])
@@ -816,6 +817,10 @@ class QueryTaskManager:
         if hit:
             return False, f"排除字符 {hit}"
         checks: list[tuple[bool, str]] = []
+        composition = db.normalize_composition(scheme.get("domain_composition"))
+        if composition:
+            allowed = {db.CHAR_CLASSES[item] for item in composition}
+            checks.append((bool(label) and set(db.label_kind(label)).issubset(allowed), "域名组成"))
         lengths = {int(value) for value in scheme.get("lengths", []) if str(value).isdigit()}
         if lengths:
             checks.append((len(label) in lengths, f"长度 {len(label)}"))
@@ -852,9 +857,16 @@ class QueryTaskManager:
         if contains:
             value = next((value for value in contains if value in label), "")
             checks.append((bool(value), f"包含字符 {value}" if value else "包含字符不匹配"))
+        if context is not None:
+            from .booking_service import date_matches, filing_matches
+
+            if scheme.get("registration_start") or scheme.get("registration_end"):
+                checks.append((date_matches(context.get("creation_date"), scheme.get("registration_start"),
+                                            scheme.get("registration_end")), "注册时间"))
+            checks.extend(filing_matches(context, scheme))
         if not checks:
             return False, ""
-        matched = all(result for result, _ in checks) if scheme.get("logic", "or") == "and" else any(result for result, _ in checks)
+        matched = all(result for result, _ in checks)
         reasons = [reason for result, reason in checks if result]
         return matched, "、".join(reasons) or "条件不匹配"
 

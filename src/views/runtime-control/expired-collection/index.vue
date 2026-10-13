@@ -24,7 +24,7 @@ import { $t } from '@/locales';
 interface SourceForm {
   source_key: string;
   name: string;
-  adapter: 'gname' | 'west_cn' | 'generic';
+  adapter: DomainSource['adapter'];
   base_url: string;
   page_path: string;
   download_template: string;
@@ -70,13 +70,17 @@ const editingScheduleId = ref<number>();
 const selectedSource = computed(() => sources.value.find(source => source.id === collectionForm.sourceId));
 const isWestSource = computed(() => selectedSource.value?.adapter === 'west_cn');
 const isGnameSource = computed(() => selectedSource.value?.adapter === 'gname');
-const isTxtGnameSource = computed(
-  () => sources.value.find(source => source.id === txtForm.sourceId)?.adapter === 'gname'
+const isAliyunSource = computed(() => selectedSource.value?.adapter === 'aliyun');
+const isTxtFilteredSource = computed(() =>
+  ['gname', 'aliyun'].includes(sources.value.find(source => source.id === txtForm.sourceId)?.adapter || '')
 );
 const scheduleSource = computed(() => sources.value.find(source => source.id === scheduleForm.sourceId));
 const isScheduleWestSource = computed(() => scheduleSource.value?.adapter === 'west_cn');
 const isScheduleGnameSource = computed(() => scheduleSource.value?.adapter === 'gname');
+const isScheduleAliyunSource = computed(() => scheduleSource.value?.adapter === 'aliyun');
 const gnameSuffixHint = '仅指定后缀入库，留空全部；多个后缀用逗号或空格分隔。';
+const aliyunSuffixHint =
+  '按日期逐个后缀导出 TXT，留空默认 com；多个后缀用逗号或空格分隔。单个后缀最多 10000 条，达到上限会提示使用源站筛选导出后导入。';
 
 function parseSuffixes(value: string) {
   return [
@@ -119,6 +123,7 @@ async function loadData(options: { silent?: boolean } = {}) {
     scheduledRuns.value = scheduledRunList;
     if (!options.silent && sourceList && !collectionForm.sourceId && sourceList.length) {
       collectionForm.sourceId = sourceList[0].id;
+      handleSourceChange(collectionForm.sourceId);
     }
 
     const firstSchedule = scheduleList?.[0];
@@ -163,9 +168,9 @@ function openEdit(source: DomainSource) {
 }
 
 function handleSourceChange(sourceId: number) {
-  collectionForm.suffixes = '';
   const source = sources.value.find(item => item.id === sourceId);
-  if (source?.adapter === 'west_cn') collectionForm.format = 'txt';
+  collectionForm.suffixes = source?.adapter === 'aliyun' ? 'com' : '';
+  if (source?.adapter === 'west_cn' || source?.adapter === 'aliyun') collectionForm.format = 'txt';
 }
 
 function selectSourceAdapter(adapter: SourceForm['adapter']) {
@@ -176,6 +181,15 @@ function selectSourceAdapter(adapter: SourceForm['adapter']) {
       base_url: 'https://www.west.cn',
       page_path: '/booking/',
       download_template: '/services/grabnew/newlist.asp',
+      parser: 'line'
+    });
+  } else if (adapter === 'aliyun') {
+    Object.assign(sourceForm, {
+      source_key: 'aliyun',
+      name: '阿里云',
+      base_url: 'https://domainapi.aliyun.com',
+      page_path: '',
+      download_template: '/partnerReserve/snatchExport.json',
       parser: 'line'
     });
   } else if (adapter === 'gname') {
@@ -245,7 +259,8 @@ async function handleCollect(latest = false) {
     window.$message?.warning('请先选择数据源');
     return;
   }
-  const suffixes = isWestSource.value || isGnameSource.value ? parseSuffixes(collectionForm.suffixes) : [];
+  const suffixes =
+    isWestSource.value || isGnameSource.value || isAliyunSource.value ? parseSuffixes(collectionForm.suffixes) : [];
   if (isWestSource.value) {
     if (!suffixes.length) {
       window.$message?.warning('西部数码请先填写要采集的域名后缀，例如：com,cn,vip');
@@ -291,7 +306,7 @@ function openTxtImport() {
   }
   txtForm.sourceId = collectionForm.sourceId || sources.value[0].id;
   txtForm.date = new Date().toISOString().slice(0, 10);
-  txtForm.suffixes = isGnameSource.value ? collectionForm.suffixes : '';
+  txtForm.suffixes = isGnameSource.value || isAliyunSource.value ? collectionForm.suffixes : '';
   resetTxtUpload();
   txtDialogVisible.value = true;
 }
@@ -331,7 +346,7 @@ async function handleTxtImport() {
       sourceId: txtForm.sourceId,
       requestedDate: txtForm.date,
       file: txtFile.value,
-      suffixes: isTxtGnameSource.value ? parseSuffixes(txtForm.suffixes) : []
+      suffixes: isTxtFilteredSource.value ? parseSuffixes(txtForm.suffixes) : []
     });
     window.$message?.success(`TXT 导入任务 #${result.run_id} 已创建`);
     txtDialogVisible.value = false;
@@ -351,7 +366,9 @@ async function handleSaveSchedule() {
   }
   try {
     const suffixes =
-      isScheduleWestSource.value || isScheduleGnameSource.value ? parseSuffixes(scheduleForm.suffixes) : [];
+      isScheduleWestSource.value || isScheduleGnameSource.value || isScheduleAliyunSource.value
+        ? parseSuffixes(scheduleForm.suffixes)
+        : [];
     if (isScheduleWestSource.value && !suffixes.length) {
       window.$message?.warning('西部数码定时任务请填写要采集的域名后缀');
       return;
@@ -533,6 +550,13 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
           :closable="false"
           title="西部数码需要登录 Cookie（CK）：请在浏览器登录 west.cn 后复制完整 Cookie，粘贴到下面的 Cookie 输入框并保存。"
         />
+        <ElAlert
+          v-if="sourceForm.adapter === 'aliyun'"
+          class="mb-12px"
+          type="info"
+          :closable="false"
+          title="阿里云需要登录 Cookie（CK）：登录 mi.aliyun.com 后复制完整 Cookie 并保存。支持按日期和后缀导出 TXT，定时任务采集当天释放日期的域名。"
+        />
         <ElRow :gutter="24">
           <ElCol :lg="6" :md="12" :sm="24">
             <ElFormItem :label="$t('page.runtime.expiredCollection.sourceKey')">
@@ -549,6 +573,7 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
               <ElSelect v-model="sourceForm.adapter" class="w-full" @change="selectSourceAdapter">
                 <ElOption label="GNAME" value="gname" />
                 <ElOption label="西部数码" value="west_cn" />
+                <ElOption label="阿里云" value="aliyun" />
                 <ElOption label="HTTP 通用" value="generic" />
               </ElSelect>
             </ElFormItem>
@@ -579,7 +604,9 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
           <ElCol :lg="12" :md="24" :sm="24">
             <ElFormItem
               :label="
-                sourceForm.adapter === 'west_cn' ? '登录 Cookie（CK）' : $t('page.runtime.expiredCollection.cookie')
+                sourceForm.adapter === 'west_cn' || sourceForm.adapter === 'aliyun'
+                  ? '登录 Cookie（CK）'
+                  : $t('page.runtime.expiredCollection.cookie')
               "
             >
               <ElInput
@@ -589,7 +616,9 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
                 :placeholder="
                   sourceForm.adapter === 'west_cn'
                     ? '粘贴西部数码登录后的完整 Cookie'
-                    : $t('page.runtime.expiredCollection.cookiePlaceholder')
+                    : sourceForm.adapter === 'aliyun'
+                      ? '粘贴阿里云登录后的完整 Cookie；留空保留已保存的 Cookie'
+                      : $t('page.runtime.expiredCollection.cookiePlaceholder')
                 "
               />
             </ElFormItem>
@@ -622,11 +651,14 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
                   </ElSelect>
                 </ElFormItem>
               </ElCol>
-              <ElCol v-if="isWestSource || isGnameSource" :lg="8" :md="12" :sm="24">
+              <ElCol v-if="isWestSource || isGnameSource || isAliyunSource" :lg="8" :md="12" :sm="24">
                 <ElFormItem :label="isGnameSource ? '入库后缀' : '采集后缀'">
                   <ElInput v-model="collectionForm.suffixes" placeholder="例如：com,net,com.cn" clearable />
                   <p v-if="isGnameSource" class="mt-4px text-12px text-gray-500 leading-normal">
                     {{ gnameSuffixHint }}
+                  </p>
+                  <p v-if="isAliyunSource" class="mt-4px text-12px text-gray-500 leading-normal">
+                    {{ aliyunSuffixHint }}
                   </p>
                 </ElFormItem>
               </ElCol>
@@ -635,7 +667,7 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
                   <ElDatePicker v-model="collectionForm.date" class="w-full" type="date" value-format="YYYY-MM-DD" />
                 </ElFormItem>
               </ElCol>
-              <ElCol v-if="!isWestSource" :lg="4" :md="12" :sm="24">
+              <ElCol v-if="!isWestSource && !isAliyunSource" :lg="4" :md="12" :sm="24">
                 <ElFormItem :label="$t('page.runtime.expiredCollection.format')">
                   <ElSelect v-model="collectionForm.format" class="w-full">
                     <ElOption label="TXT" value="txt" />
@@ -647,7 +679,7 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
                 <ElSpace class="w-full justify-end" alignment="end">
                   <ElButton v-if="!isWestSource" plain @click="openTxtImport">导入 TXT</ElButton>
                   <ElButton v-if="!isWestSource" @click="handleCollect(true)">
-                    {{ $t('page.runtime.expiredCollection.latest') }}
+                    {{ isAliyunSource ? '采集今日' : $t('page.runtime.expiredCollection.latest') }}
                   </ElButton>
                   <ElButton type="primary" @click="handleCollect()">
                     {{ isWestSource ? '开始采集' : $t('page.runtime.expiredCollection.start') }}
@@ -697,11 +729,19 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
                   </ElSelect>
                 </ElFormItem>
               </ElCol>
-              <ElCol v-if="isScheduleWestSource || isScheduleGnameSource" :lg="6" :md="12" :sm="24">
+              <ElCol
+                v-if="isScheduleWestSource || isScheduleGnameSource || isScheduleAliyunSource"
+                :lg="6"
+                :md="12"
+                :sm="24"
+              >
                 <ElFormItem :label="isScheduleGnameSource ? '入库后缀' : '导出后缀'">
                   <ElInput v-model="scheduleForm.suffixes" placeholder="例如：com,net,com.cn" clearable />
                   <p v-if="isScheduleGnameSource" class="mt-4px text-12px text-gray-500 leading-normal">
                     {{ gnameSuffixHint }}
+                  </p>
+                  <p v-if="isScheduleAliyunSource" class="mt-4px text-12px text-gray-500 leading-normal">
+                    {{ aliyunSuffixHint }}
                   </p>
                 </ElFormItem>
               </ElCol>
@@ -808,7 +848,7 @@ onBeforeUnmount(() => clearInterval(refreshTimer));
         <ElFormItem label="数据日期">
           <ElDatePicker v-model="txtForm.date" class="w-full" type="date" value-format="YYYY-MM-DD" />
         </ElFormItem>
-        <ElFormItem v-if="isTxtGnameSource" label="入库后缀">
+        <ElFormItem v-if="isTxtFilteredSource" label="入库后缀">
           <ElInput v-model="txtForm.suffixes" placeholder="例如：com,net,com.cn" clearable />
           <p class="mt-4px text-12px text-gray-500 leading-normal">{{ gnameSuffixHint }}</p>
         </ElFormItem>

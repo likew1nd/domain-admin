@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Query
@@ -57,9 +57,16 @@ def _ratio(part: int, total: int) -> float:
     return round(part * 100 / total, 2) if total else 0.0
 
 
+def _local_day_bounds(day: date) -> tuple[str, str]:
+    """Return UTC bounds for a local calendar day, matching the dashboard's "today" label."""
+    start = datetime.combine(day, datetime_time.min).astimezone(timezone.utc)
+    end = datetime.combine(day + timedelta(days=1), datetime_time.min).astimezone(timezone.utc)
+    return start.replace(microsecond=0).isoformat(), end.replace(microsecond=0).isoformat()
+
+
 def _heavy_stats() -> dict[str, Any]:
     today = date.today()
-    trend_start = (today - timedelta(days=_TREND_DAYS - 1)).isoformat()
+    trend_start = _local_day_bounds(today - timedelta(days=_TREND_DAYS - 1))[0]
     # 只读聚合耗时数秒，不占用全局写锁，避免阻塞查询、监控任务写库
     with db.get_connection() as connection:
 
@@ -76,8 +83,8 @@ def _heavy_stats() -> dict[str, Any]:
         suffix_rows = rows("SELECT suffix AS name, COUNT(*) AS value FROM domains GROUP BY suffix ORDER BY value DESC")
         daily = rows(
             """
-            SELECT joined_at AS day, source_name AS source, COUNT(*) AS value
-            FROM domains WHERE joined_at >= ? GROUP BY joined_at, source_id
+            SELECT date(imported_at, 'localtime') AS day, source_name AS source, COUNT(*) AS value
+            FROM domains WHERE imported_at >= ? GROUP BY day, source_id
             """,
             (trend_start,),
         )
@@ -148,14 +155,20 @@ def _cached_stats(refresh: bool) -> dict[str, Any]:
 
 
 def _live_stats() -> dict[str, Any]:
-    """Return the small set of counters that must follow query progress."""
-    # 读取 query_time 索引计数，不占用查询任务写库使用的全局锁。
+    """Return counters that must follow query progress and new imports."""
+    today = date.today()
+    yesterday_start, today_start = _local_day_bounds(today - timedelta(days=1))
+    _, tomorrow_start = _local_day_bounds(today)
+    # 读取索引计数，不占用查询任务写库使用的全局锁。
     with db.get_connection() as connection:
         row = connection.execute(
             """
             SELECT (SELECT COUNT(*) FROM domains) AS total,
-                   (SELECT COUNT(*) FROM domains WHERE query_time > '') AS queried
-            """
+                   (SELECT COUNT(*) FROM domains WHERE query_time > '') AS queried,
+                   (SELECT COUNT(*) FROM domains WHERE imported_at >= ? AND imported_at < ?) AS today_joined,
+                   (SELECT COUNT(*) FROM domains WHERE imported_at >= ? AND imported_at < ?) AS yesterday_joined
+            """,
+            (today_start, tomorrow_start, yesterday_start, today_start),
         ).fetchone()
     total, queried = row["total"], row["queried"]
     return {
@@ -163,6 +176,8 @@ def _live_stats() -> dict[str, Any]:
         "queried": queried,
         "pending": total - queried,
         "queryRate": _ratio(queried, total),
+        "todayJoined": row["today_joined"],
+        "yesterdayJoined": row["yesterday_joined"],
     }
 
 
@@ -264,6 +279,25 @@ def _runtime() -> dict[str, Any]:
     def counts(sql: str) -> dict[str, int]:
         return {row["status"]: row["value"] for row in db.fetch_all(sql)}
 
+    booking = db.fetch_one(
+        """
+        WITH booking_domains AS (
+            SELECT domain,
+                   MAX(status = 'success') AS success,
+                   MAX(status IN ('pending', 'sending')) AS processing,
+                   MAX(status = 'uncertain') AS uncertain
+            FROM booking_attempts
+            GROUP BY domain
+        )
+        SELECT COUNT(*) AS total,
+               COALESCE(SUM(success), 0) AS success,
+               COALESCE(SUM(success = 0 AND processing = 1), 0) AS processing,
+               COALESCE(SUM(success = 0 AND processing = 0 AND uncertain = 1), 0) AS uncertain,
+               COALESCE(SUM(success = 0 AND processing = 0 AND uncertain = 0), 0) AS failure
+        FROM booking_domains
+        """
+    ) or {}
+
     return {
         "queryTask": {key: task[key] for key in QUERY_TASK_FIELDS} if task else None,
         "collect": {
@@ -286,6 +320,13 @@ def _runtime() -> dict[str, Any]:
             "domains": counts("SELECT status, COUNT(*) AS value FROM monitor_domain_state GROUP BY status"),
         },
         "registration": counts("SELECT status, COUNT(*) AS value FROM registration_attempts GROUP BY status"),
+        "booking": {
+            "total": booking.get("total") or 0,
+            "success": booking.get("success") or 0,
+            "processing": booking.get("processing") or 0,
+            "uncertain": booking.get("uncertain") or 0,
+            "failure": booking.get("failure") or 0,
+        },
         "registrarApis": {"total": apis.get("total") or 0, "enabled": apis.get("enabled") or 0},
         "sources": [
             {"id": s["id"], "name": s["name"], "enabled": bool(s["enabled"]), "hasCookie": bool(s["has_cookie"])}

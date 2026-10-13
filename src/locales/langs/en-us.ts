@@ -183,6 +183,7 @@ const local: App.I18n.Schema = {
     'domain-generation_domain-generator': 'Domain Generator',
     'domain-generation_domain-dictionary': 'Dictionary Management',
     'domain-management': 'Domain Management',
+    'domain-management_booked': 'Booked Domains',
     'domain-management_expired': 'Expired Domains',
     'domain-management_qualified': 'Qualified Domains',
     'domain-management_unqualified': 'Unqualified Domains',

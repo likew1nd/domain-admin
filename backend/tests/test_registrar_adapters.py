@@ -19,6 +19,7 @@ from app.registrar_adapters import (
     AliyunIntlRegistrar,
     DynadotRegistrar,
     GodaddyRegistrar,
+    GnameRegistrar,
     HttpJsonRegistrar,
     RegistrarError,
     _availability_result,
@@ -30,6 +31,23 @@ import app.registrar_adapters as registrar_adapters
 class RegistrarAdapterTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.dict(registrar_adapters._dynadot_states, clear=True))
+
+    def test_gname_auth_uses_application_user_agent_official_path_and_success_code(self):
+        def gateway(request):
+            if not request.get_header("User-agent"):
+                return 403, '{"title":"Error 1010: Access denied","status":403}'
+            self.assertEqual(request.full_url, "https://api.gname.com/api/user/info")
+            return 200, '{"code":1,"msg":"OK","data":{"uid":"123"}}'
+
+        for config in ({}, {"test_path": "/user/info"}, {"test_path": "/api/user/info"}):
+            with self.subTest(config=config), patch.object(registrar_adapters, "_send", side_effect=gateway):
+                success, status, _ = GnameRegistrar({"config": config}, "id:key").test()
+                self.assertEqual(status, 200, "Cloudflare Error 1010 must not be reported as bad credentials")
+                self.assertTrue(success)
+        adapter = GnameRegistrar({"config": {"test_path": "/custom/test"}}, "id:key")
+        with patch.object(adapter, "_request_signed", return_value=(200, '{"code":-1}')) as send:
+            self.assertFalse(adapter.test()[0])
+            send.assert_called_once_with("/custom/test", {})
 
     def test_dynadot_parallel_availability_queries_do_not_burst(self):
         clock = [100.0]
